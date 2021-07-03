@@ -1,2 +1,2 @@
 # everytask
-command line record every job and finally save data tp sqlite
+command line record every job and finally save data to sqlite
