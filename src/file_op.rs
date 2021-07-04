@@ -2,11 +2,11 @@ use std::fs::{self, OpenOptions};
 use std::io::prelude::*;
 use std::path::Path;
 
-pub fn append_line_into_todo(strline: String) {
+pub fn append_line_into_file(path: &str,strline: String) {
     let mut f = OpenOptions::new()
         .create(true)
         .append(true)
-        .open("todo.txt")
+        .open(path)
         .unwrap();
     writeln!(f, "{}", strline).unwrap();
 }

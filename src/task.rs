@@ -9,6 +9,9 @@ use std::{
     env, fs,
     io::{self, prelude::*},
 };
+trait ToHM {
+    fn dur_to_hm(&self)->String;
+}
 /// record today's date
 #[derive(Debug, Default, PartialEq, Clone, Copy)]
 struct Date {
@@ -31,7 +34,16 @@ impl Into<Date> for String {
         }
     }
 }
+impl std::fmt::Display for Date {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({}-{}-{})", self.year, self.month, self.day)
+    }
+}
 impl Date {
+    fn weekday() ->String{
+        let local = Local::now();
+      local.weekday().to_string()  
+    }
     fn write_date() {
         let dt: String = Date::today_date().into();
         let path = "date.txt";
@@ -105,7 +117,14 @@ struct OneTaskTs {
     end_ts: TimeStamp,
     one_task_duration: u32,
 }
-
+impl ToHM for OneTaskTs{
+    fn dur_to_hm(&self) ->String {
+      let pre_dur=self.one_task_duration;
+      let h=pre_dur/60;
+      let m=pre_dur%60;
+            format!("{} h {} min",h,m)
+    }
+  }
 impl OneTaskTs {
     fn set_onetask_dur(&mut self, dur: &String) {
         let i = dur.parse::<u32>().unwrap();
@@ -207,7 +226,13 @@ fn match_input_task(task_instance: &mut Task, task_str: String, fix_task_vec: Ve
         }
     }
 }
+fn summary_tasks(task:&Task) {
+   let task_str= format!("task: {} detail: {} ,last for {}",task.task,
+task.detail,task.onetaskts.dur_to_hm()
+);
+append_line_into_file("summary.txt", task_str); 
 
+}
 fn work_flow(task_instance: &mut Task) {
     // get current_ts
     let cur_ts = TimeStamp::current_ts();
@@ -238,7 +263,7 @@ fn work_flow(task_instance: &mut Task) {
         // pack task
         let pack_ln = tkits.psudo_pack();
         // write to todo
-        append_line_into_todo(pack_ln);
+        append_line_into_file("todo.txt",pack_ln);
     } else if get_task_mode == "m" {
         tkits.onetaskts.set_end_ts(&cur_ts);
         let curts = tkits.onetaskts.end_ts.return_ts();
@@ -278,7 +303,7 @@ fn work_flow(task_instance: &mut Task) {
             // pack task
             let pack_ln = tkits.psudo_pack();
             // write to todo
-            append_line_into_todo(pack_ln);
+        append_line_into_file("todo.txt",pack_ln);
             //    set last end_ts as this time begin_ts
             tkits.onetaskts.begin_ts = tkits.onetaskts.end_ts.into();
         }
@@ -291,6 +316,14 @@ struct DayEndTs {
     bed_ts: TimeStamp,
     day_duration: u32,
 }
+impl ToHM for DayEndTs{
+  fn dur_to_hm(&self) ->String {
+    let pre_dur=self.day_duration;
+    let h=pre_dur/60;
+    let m=pre_dur%60;
+          format!("{} h {} min",h,m)
+  }
+}
 impl DayEndTs {
     fn set_getup_ts(&mut self, hm_str: &String) {
         self.getup_ts = hm_str.into()
@@ -298,6 +331,7 @@ impl DayEndTs {
     fn set_bed_ts(&mut self, hm_str: String) {
         self.bed_ts = (&hm_str).into()
     }
+   
     fn calcu_set_day_dur(&mut self) {
         if self.getup_ts != TimeStamp::default() || self.bed_ts != TimeStamp::default() {
             let g_h = self.getup_ts.hour;
@@ -412,8 +446,15 @@ impl Task {
                 t.dayendts.set_bed_ts(t.onetaskts.end_ts.return_ts());
                 //    calcu and set dayend_dur
                 t.dayendts.calcu_set_day_dur();
-
-                //    get db_last_index from db_query
+// write date,dayendts to summary file
+let date_str=format!("date {} {}",t.date.to_string(),Date::weekday());
+let daydur_str=format!("the day is from {} to {} ,last for {}",t.dayendts.getup_ts.return_ts(),
+t.dayendts.bed_ts.return_ts(),t.dayendts.dur_to_hm()
+) ;   
+append_line_into_file("summary.txt", date_str); 
+append_line_into_file("summary.txt", daydur_str); 
+   
+//    get db_last_index from db_query
                 let mut idx = Sqlite::get_last_index();
                 //    generate a vec of tasks
                 let mut v_alltk = vec![];
@@ -424,20 +465,28 @@ impl Task {
                     t.psudo_unpack(line);
 
                     if t.is_task_instance_default() {
-                        println!("task instance stay init state")
+                        panic!("task instance stay init state");
+                       
                     }
 
                     let ar = t.return_task_dbline(idx);
                     v_alltk.push(ar);
+        // write today's jobs tp summary.txt
+        summary_tasks(&t);
+
+                    
                 }
-                println!("{:?}", &v_alltk);
+append_line_into_file("summary.txt", "\n".to_owned()); 
+                // print today's task linebyline
                 let sql = "INSERT INTO everytask VALUES (?,?,?,?,?,?,?,?,?,?)";
                 conn.db_execute_many(sql, v_alltk).unwrap();
-            }
-            println!("clear file contents of todo.txt,date.txt");
+            
+                println!("clear file contents of todo.txt,date.txt");
             clear_contents("todo.txt");
             clear_contents("date.txt");
-
+           
+        }
+            
             return;
         }
         //  create a new task instance
@@ -510,4 +559,12 @@ fn test_unpack() {
 fn test_intlen() {
     let s = 00.to_string();
     println!("00 {}", s);
+}
+
+#[test]
+fn test_yu() {
+    let s=30;
+    let r=124/60;
+    let x=124%60;
+    println!("{}{}",r,x);
 }
