@@ -40,9 +40,12 @@ impl std::fmt::Display for Date {
     }
 }
 impl Date {
-    fn weekday() ->String{
+    fn weekday(&self) ->String{
+    
         let local = Local::now();
-      local.weekday().to_string()  
+        let y=local.year();
+        let local_dt=Local.ymd(y, self.month, self.day);
+      local_dt.weekday().to_string()  
     }
     fn write_date() {
         let dt: String = Date::today_date().into();
@@ -447,7 +450,7 @@ impl Task {
                 //    calcu and set dayend_dur
                 t.dayendts.calcu_set_day_dur();
 // write date,dayendts to summary file
-let date_str=format!("date {} {}",t.date.to_string(),Date::weekday());
+let date_str=format!("date {} {}",t.date.to_string(),t.date.weekday());
 let daydur_str=format!("the day is from {} to {} ,last for {}",t.dayendts.getup_ts.return_ts(),
 t.dayendts.bed_ts.return_ts(),t.dayendts.dur_to_hm()
 ) ;   
@@ -480,7 +483,7 @@ append_line_into_file("summary.txt", "\n".to_owned());
                 // print today's task linebyline
                 let sql = "INSERT INTO everytask VALUES (?,?,?,?,?,?,?,?,?,?)";
                 conn.db_execute_many(sql, v_alltk).unwrap();
-            
+            input_something("Have ypu charged wifi machine? enter").unwrap();
                 println!("clear file contents of todo.txt,date.txt");
             clear_contents("todo.txt");
             clear_contents("date.txt");
