@@ -274,14 +274,14 @@ fn work_flow(task_instance: &mut Task) {
         // print fixed tasks ,waiting for being selected
         loop {
             // return begin ts
-
+println!("begin_ts is {}",tkits.onetaskts.begin_ts.return_ts() );
             let end_ts = input_something(
                 format!("input job end time(q:quit ; n: current_ts {})：", curts).as_str(),
             )
             .unwrap();
 
             if end_ts.chars().count() == 1 {
-                //   inply input n ,cur_ts as end_ts
+                //   imply according to input n ,cur_ts as end_ts
                 //  set onetask_dur
 
                 if end_ts == "n" {
