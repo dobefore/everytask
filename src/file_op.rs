@@ -2,7 +2,7 @@ use std::fs::{self, OpenOptions};
 use std::io::prelude::*;
 use std::path::Path;
 
-pub fn append_line_into_file(path: &str,strline: String) {
+pub fn append_line_into_file(path: &str, strline: String) {
     let mut f = OpenOptions::new()
         .create(true)
         .append(true)
@@ -10,13 +10,13 @@ pub fn append_line_into_file(path: &str,strline: String) {
         .unwrap();
     writeln!(f, "{}", strline).unwrap();
 }
-pub fn read_lastline_from_todo() -> String {
-    let bf = fs::read_to_string("todo.txt").unwrap();
+pub fn read_lastline_from_file(path: &str) -> String {
+    let bf = fs::read_to_string(path).unwrap();
     let ll = bf.lines().last().unwrap().trim();
     ll.to_string()
 }
-pub fn read_alllines_from_todo() -> Vec<String> {
-    let v = fs::read_to_string("todo.txt")
+pub fn read_alllines_from_file(path: &str) -> Vec<String> {
+    let v = fs::read_to_string(path)
         .unwrap()
         .lines()
         .map(|f| f.to_owned())
@@ -38,6 +38,6 @@ pub fn clear_contents(path: &str) {
 pub fn create_ifnotexist(path: &str) {
     if !Path::new(path).exists() {
         fs::File::create(path).unwrap();
-        println!("created file {}",path)
+        println!("created file {}", path)
     }
 }
