@@ -5,6 +5,7 @@ use chrono::prelude::*;
 use std::borrow::BorrowMut;
 use std::cell::RefCell;
 use std::fmt::Display;
+use std::fs::OpenOptions;
 use std::process::id;
 use std::rc::Rc;
 use std::{
@@ -235,6 +236,30 @@ fn init_file() {
     create_ifnotexist("date.txt");
     create_ifnotexist("extask.txt");
     create_ifnotexist("fix_task.txt");
+}
+/// copy task.db and summary.txt to ./storage/shared/ if weekday is Sat
+fn cp_taskdb_to_storage() {
+    let db = "task.db";
+    let sm="summary.txt";
+    let t = "../storage/shared/task.db";
+    let smt = "../storage/shared/summary.txt";
+    let weekday=Local::now().weekday().to_string();
+if  weekday=="Sat".to_string() {
+    println!("copy task.db summary.txt to phone storage");
+    fs::copy(db, t).unwrap();
+    fs::copy(sm, smt).unwrap();
+
+}
+}
+/// append_backup_task_to_extask if date is saturday
+fn write_backup_task_to_extask() {
+    let mut  f=OpenOptions::new().append(true).open("extask.txt").unwrap();
+let weekday=Local::now().weekday().to_string();
+if  weekday=="Sat".to_string() {
+    writeln!(f,"备份task.db,web source,read book").unwrap();
+println!("already write backup task to next task file");
+}
+
 }
 fn work_flow(task_instance: &mut Task) {
     // get current_ts
@@ -516,6 +541,8 @@ impl Task {
                 let sql = "INSERT INTO everytask VALUES (?,?,?,?,?,?,?,?,?,?)";
                 conn.db_execute_many(sql, v_alltk).unwrap();
                 input_something("Have ypu charged wifi machine? enter").unwrap();
+                write_backup_task_to_extask();
+                cp_taskdb_to_storage();
                 println!("clear file contents of todo.txt,date.txt");
                 clear_contents("todo.txt");
                 clear_contents("date.txt");
@@ -635,7 +662,12 @@ fn test_intlen() {
     let s = 00.to_string();
     println!("00 {}", s);
 }
-
+#[test]
+fn test_week() {
+    let weekday=Local::now().weekday().to_string();
+//    Sun
+    println!("{}",weekday);
+}
 #[test]
 fn test_yu() {
     let s = 30;
