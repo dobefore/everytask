@@ -2,6 +2,8 @@ use std::path::Path;
 
 use rusqlite::OptionalExtension;
 pub use rusqlite::{params, types::FromSql, Connection, Result, Row, RowIndex};
+
+use crate::task::{DayEndTs, NewTask, Task};
 pub struct Sqlite {
     pub db: Connection,
 }
@@ -16,7 +18,7 @@ impl Sqlite {
         let s = self.db.query_row(sql, params![], |r| r.get(0))?;
         Ok(s)
     }
-
+    
     pub fn fetchall<I: RowIndex + Copy, T: FromSql>(
         &self,
         sql: &str,
@@ -51,20 +53,40 @@ impl Sqlite {
         Ok(())
     }
     /// eg: excu insert manytimes
-    pub fn db_execute_many(&self, sql: &str, args: Vec<[String; 10]>) -> Result<()> {
+    pub fn db_execute_many(&self, sql: &str, args: Vec<[String; 12]>) -> Result<()> {
         let mut stmt = self.db.prepare(sql)?;
 
         for param in args {
             stmt.execute(params![
                 param[0], param[1], param[2], param[3], param[4], param[5], param[6], param[7],
-                param[8], param[9]
+                param[8], param[9], param[10], param[11]
             ])?;
         }
 
         Ok(())
     }
 }
-
+// row from table everytask de-construct to old task struct
+fn to_task(row: &Row) -> Result<Task> {
+    Ok(Task {
+        index: row.get(0).unwrap(),
+        date: row.get::<usize, String>(1).unwrap().into(),
+        dayendts: (
+            row.get(2).unwrap(),
+            row.get(3).unwrap(),
+            row.get(4).unwrap(),
+        )
+            .into(),
+        onetaskts: (
+            row.get(5).unwrap(),
+            row.get(6).unwrap(),
+            row.get(7).unwrap(),
+        )
+            .into(),
+        task: row.get(8).unwrap(),
+        detail: row.get(9).unwrap(),
+    })
+}
 #[test]
 fn test_table_field() {
     let q = "select * from everytask";
@@ -72,4 +94,27 @@ fn test_table_field() {
     let c = Sqlite::new_conn("task.db").unwrap();
     let a: Vec<usize> = c.fetchall(q, 7).unwrap();
     println!("{:?}", a);
+}
+///fetch all old tasks rec write to newtask
+#[test]
+fn test_fetchall_write_newtask() -> Result<()> {
+    let db = Connection::open("task.db").unwrap();
+    let mut s = db.prepare("select * from everytask").unwrap();
+    let rows = s.query_and_then([], |row| to_task(row)).unwrap();
+
+    db.execute_batch(include_str!("create.sql")).unwrap();
+    let sql = "INSERT INTO everydaytask VALUES (?,?,?,?,?,?,?,?,?,?,?,?)";
+
+    // update recs to new task
+    for i in rows {
+        // complete new task update fn
+        // write newtasks to db
+        let ex_t = "";
+        let ex_d = "";
+        let nt = NewTask::update_from_old_tasks(&i.unwrap(), (ex_t, ex_d)).unwrap();
+        let v = nt.to_slice();
+        println!("{:?}", v);
+        db.execute(sql, v).unwrap();
+    }
+    Ok(())
 }

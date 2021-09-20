@@ -1,5 +1,5 @@
 [package]
-name = "everytask"
+name = "task"
 version = "0.1.0"
 authors = ["dobefore <1432338032@qq.com>"]
 edition = "2018"

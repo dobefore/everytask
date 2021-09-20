@@ -5,8 +5,8 @@ use chrono::prelude::*;
 use std::borrow::BorrowMut;
 use std::cell::RefCell;
 use std::fmt::Display;
-use std::fs::OpenOptions;
-use std::process::id;
+use std::fs::{File, OpenOptions};
+use std::io::BufReader;
 use std::rc::Rc;
 use std::{
     env, fs,
@@ -17,7 +17,7 @@ trait ToHM {
 }
 /// record today's date
 #[derive(Debug, Default, PartialEq, Clone, Copy)]
-struct Date {
+pub struct Date {
     pub year: u32,
     pub month: u32,
     pub day: u32,
@@ -66,12 +66,13 @@ impl Date {
     fn load_date_from_file(&mut self) {
         let fp = "date.txt";
         let ds = fs::read_to_string(fp).unwrap().trim().to_owned();
-        if ds == "" {
+        *self = if ds == "" {
             println!("no date in file");
-            return;
+            let dt: String = Date::today_date().into();
+            dt.into()
+        } else {
+            ds.into()
         }
-
-        *self = ds.into();
     }
 }
 #[derive(Debug, Default, PartialEq, Clone, Copy)]
@@ -84,7 +85,7 @@ impl From<TimeStamp> for String {
         format!("{:02}:{:02}", &ts.hour, &ts.minute)
     }
 }
-impl Into<TimeStamp> for &String {
+impl Into<TimeStamp> for String {
     fn into(self) -> TimeStamp {
         let v: Vec<u32> = self.split(":").map(|r| r.parse::<u32>().unwrap()).collect();
         TimeStamp {
@@ -103,7 +104,7 @@ impl TimeStamp {
     }
 }
 #[derive(Debug, Default, PartialEq, Clone, Copy)]
-struct OneTaskTs {
+pub struct OneTaskTs {
     begin_ts: TimeStamp,
     end_ts: TimeStamp,
     one_task_duration: u32,
@@ -116,16 +117,25 @@ impl ToHM for OneTaskTs {
         format!("{} h {} min", h, m)
     }
 }
+impl From<(String, String, u32)> for OneTaskTs {
+    fn from(items: (String, String, u32)) -> Self {
+        Self {
+            begin_ts: items.0.into(),
+            end_ts: items.1.into(),
+            one_task_duration: items.2,
+        }
+    }
+}
 impl OneTaskTs {
     fn set_onetask_dur(&mut self, dur: &String) {
         let i = dur.parse::<u32>().unwrap();
         self.one_task_duration = i
     }
     fn set_end_ts(&mut self, ts: &String) {
-        self.end_ts = ts.into()
+        self.end_ts = ts.to_owned().into()
     }
     fn set_begin_ts(&mut self, ts: &String) {
-        self.begin_ts = ts.into()
+        self.begin_ts = ts.to_owned().into()
     }
     fn calcu_set_onetask_dur(&mut self) {
         if self.begin_ts != TimeStamp::default() || self.end_ts != TimeStamp::default() {
@@ -221,45 +231,58 @@ fn match_input_task(task_instance: &mut Task, task_str: String, fix_task_vec: Ve
         }
     }
 }
-fn summary_tasks(task: &Task) {
+fn summary_tasks(ntask: &NewTask) {
     let task_str = format!(
-        "task: {} detail: {} ,last for {}",
-        task.task,
-        task.detail,
-        task.onetaskts.dur_to_hm()
+        "expected schedule {} detail {} \n
+        task: {} detail: {} ,last for {}
+        ",
+        ntask.expected_behavior,
+        ntask.expected_details,
+        ntask.task.task,
+        ntask.task.detail,
+        ntask.task.onetaskts.dur_to_hm(),
     );
     append_line_into_file("summary.txt", task_str);
 }
-/// create file and db if not exist once app starts
+/// create file  if not exist once app starts
 fn init_file() {
     create_ifnotexist("todo.txt");
     create_ifnotexist("date.txt");
     create_ifnotexist("extask.txt");
     create_ifnotexist("fix_task.txt");
+    create_ifnotexist("expect_behavior.txt")
 }
 /// copy task.db and summary.txt to ./storage/shared/ if weekday is Sat
 fn cp_taskdb_to_storage() {
     let db = "task.db";
-    let sm="summary.txt";
+    let sm = "summary.txt";
     let t = "../storage/shared/task.db";
     let smt = "../storage/shared/summary.txt";
-    let weekday=Local::now().weekday().to_string();
-if  weekday=="Sat".to_string() {
-    println!("copy task.db summary.txt to phone storage");
-    fs::copy(db, t).unwrap();
-    fs::copy(sm, smt).unwrap();
-
+    let weekday = Local::now().weekday().to_string();
+    if weekday == "Sat".to_string() {
+        println!("copy task.db summary.txt to phone storage");
+        fs::copy(db, t).unwrap();
+        fs::copy(sm, smt).unwrap();
+    }
 }
+fn get_exptected_task_details() -> (String, String) {
+    let mut v = read_alllines_from_file("expect_behavior.txt");
+    if !v.is_empty() {
+        let ext = v.remove(0);
+        let exd = v.join(" ");
+        (ext, exd)
+    } else {
+        ("".to_string(), "".to_string())
+    }
 }
 /// append_backup_task_to_extask if date is saturday
 fn write_backup_task_to_extask() {
-    let mut  f=OpenOptions::new().append(true).open("extask.txt").unwrap();
-let weekday=Local::now().weekday().to_string();
-if  weekday=="Sat".to_string() {
-    writeln!(f,"备份task.db,web source,read book").unwrap();
-println!("already write backup task to next task file");
-}
-
+    let mut f = OpenOptions::new().append(true).open("extask.txt").unwrap();
+    let weekday = Local::now().weekday().to_string();
+    if weekday == "Sat".to_string() {
+        writeln!(f, "备份task.db,web source,read book").unwrap();
+        println!("already write backup task to next task file");
+    }
 }
 fn work_flow(task_instance: &mut Task) {
     // get current_ts
@@ -286,12 +309,28 @@ fn work_flow(task_instance: &mut Task) {
         )
         .unwrap();
         match_input_task(tkits.borrow_mut(), task, v);
+        println!("check if you fullfil your expect");
+        let v = read_alllines_from_file("expect_behavior.txt");
+        if !v.is_empty() {
+            for i in v {
+                println!("{}", i);
+            }
+        } else {
+            println!("No Schedule")
+        }
         let detail = input_something("输入工作细节：").unwrap();
         tkits.set_detail(&detail);
+
+        // here read ex task and detail from txt
+        // only works on single mode
+        let args = get_exptected_task_details();
+        let newtask =
+            NewTask::update_from_old_tasks(&*tkits, (args.0.as_str(), args.1.as_str())).unwrap();
+        clear_contents("expect_behavior.txt");
         // pack task
-        let pack_ln = tkits.psudo_pack();
+        let string_ln = newtask.to_string();
         // write to todo
-        append_line_into_file("todo.txt", pack_ln);
+        append_line_into_file("todo.txt", string_ln);
     } else if get_task_mode == "m" {
         tkits.onetaskts.set_end_ts(&cur_ts);
         let curts = tkits.onetaskts.end_ts.return_ts();
@@ -330,9 +369,11 @@ fn work_flow(task_instance: &mut Task) {
             tkits.set_detail(&detail);
             tkits.onetaskts.calcu_set_onetask_dur();
             // pack task
-            let pack_ln = tkits.psudo_pack();
+            let newtask = NewTask::update_from_old_tasks(&*tkits, ("", "")).unwrap();
+            let string_ln = newtask.to_string();
+            clear_contents("expect_behavior.txt");
             // write to todo
-            append_line_into_file("todo.txt", pack_ln);
+            append_line_into_file("todo.txt", string_ln);
             //    set last end_ts as this time begin_ts
             tkits.onetaskts.begin_ts = tkits.onetaskts.end_ts.into();
         }
@@ -340,10 +381,19 @@ fn work_flow(task_instance: &mut Task) {
 }
 /// ts:timestamp
 #[derive(Debug, Default, PartialEq, Clone, Copy)]
-struct DayEndTs {
+pub struct DayEndTs {
     getup_ts: TimeStamp,
     bed_ts: TimeStamp,
     day_duration: u32,
+}
+impl From<(String, String, u32)> for DayEndTs {
+    fn from(items: (String, String, u32)) -> Self {
+        Self {
+            getup_ts: items.0.into(),
+            bed_ts: items.1.into(),
+            day_duration: items.2,
+        }
+    }
 }
 impl ToHM for DayEndTs {
     fn dur_to_hm(&self) -> String {
@@ -355,10 +405,10 @@ impl ToHM for DayEndTs {
 }
 impl DayEndTs {
     fn set_getup_ts(&mut self, hm_str: &String) {
-        self.getup_ts = hm_str.into()
+        self.getup_ts = hm_str.to_owned().into()
     }
     fn set_bed_ts(&mut self, hm_str: String) {
-        self.bed_ts = (&hm_str).into()
+        self.bed_ts = hm_str.into()
     }
 
     fn calcu_set_day_dur(&mut self) {
@@ -427,14 +477,57 @@ impl ExTask {
     }
 }
 #[derive(Debug, Default, PartialEq, Clone)]
+pub struct NewTask {
+    expected_behavior: String,
+    /// readlines to one line join by ' '
+    expected_details: String,
+    task: Task,
+}
+impl ToString for NewTask {
+    fn to_string(&self) -> String {
+        format!(
+            "{};;{};;{}",
+            self.task.psudo_pack(),
+            self.expected_behavior,
+            self.expected_details
+        )
+    }
+}
+impl NewTask {
+    pub fn update_from_old_tasks(old_task: &Task, new_args: (&str, &str)) -> io::Result<Self> {
+        Ok(Self {
+            task: old_task.to_owned(),
+            expected_behavior: new_args.0.to_owned(),
+            expected_details: new_args.1.to_owned(),
+        })
+    }
+    pub fn to_slice(&self) -> [String; 12] {
+        let o_v = self.to_owned().task.to_slice();
+        [
+            (&o_v[0]).to_owned(),
+            (&o_v[1]).to_owned(),
+            (&o_v[2]).to_owned(),
+            (&o_v[3]).to_owned(),
+            (&o_v[4]).to_owned(),
+            (&o_v[5]).to_owned(),
+            (&o_v[6]).to_owned(),
+            (&o_v[7]).to_owned(),
+            (&o_v[8]).to_owned(),
+            (&o_v[9]).to_owned(),
+            self.to_owned().expected_behavior,
+            self.to_owned().expected_details,
+        ]
+    }
+}
+#[derive(Debug, Default, PartialEq, Clone)]
 pub struct Task {
     /// for db insert use
-    index: u64,
-    task: String,
-    date: Date,
-    dayendts: DayEndTs,
-    onetaskts: OneTaskTs,
-    detail: String,
+    pub index: u64,
+    pub task: String,
+    pub date: Date,
+    pub dayendts: DayEndTs,
+    pub onetaskts: OneTaskTs,
+    pub detail: String,
 }
 
 impl Task {
@@ -457,6 +550,21 @@ impl Task {
     }
     fn set_task(&mut self, task: &String) {
         self.task = task.to_owned();
+    }
+    pub fn to_slice(self) -> [String; 10] {
+        let v = [
+            (self.index.to_string()),
+            (self.date.into()),
+            (self.dayendts.getup_ts.return_ts().to_owned()),
+            (self.dayendts.bed_ts.return_ts().to_owned()),
+            (self.dayendts.day_duration.to_string()),
+            (self.onetaskts.begin_ts.return_ts().to_owned()),
+            (self.onetaskts.end_ts.return_ts().to_owned()),
+            (self.onetaskts.one_task_duration.to_string()),
+            (self.task.to_owned()),
+            (self.detail.to_owned()),
+        ];
+        v
     }
     fn return_task_dbline(&self, id_num: u64) -> [String; 10] {
         let v = [
@@ -516,7 +624,7 @@ impl Task {
                 append_line_into_file("summary.txt", daydur_str);
 
                 //    get db_last_index from db_query
-                let sql = "SELECT id from everytask  ORDER BY id DESC";
+                let sql = "SELECT id from everydaytask  ORDER BY id DESC";
                 let path = "task.db";
                 let mut idx = Sqlite::get_last_index(sql, path);
                 //    generate a vec of tasks
@@ -525,20 +633,19 @@ impl Task {
                 for line in v_alll {
                     idx += 1;
                     t.set_index(idx);
-                    t.psudo_unpack(line);
-
+                    let nt = t.psudo_unpack(line);
                     if t.is_task_instance_default() {
                         panic!("task instance stay init state");
                     }
 
-                    let ar = t.return_task_dbline(idx);
+                    let ar = nt.to_slice();
                     v_alltk.push(ar);
                     // write today's jobs tp summary.txt
-                    summary_tasks(&t);
+                    summary_tasks(&nt);
                 }
                 append_line_into_file("summary.txt", "\n".to_owned());
                 // print today's task linebyline
-                let sql = "INSERT INTO everytask VALUES (?,?,?,?,?,?,?,?,?,?)";
+                let sql = "INSERT INTO everydaytask VALUES (?,?,?,?,?,?,?,?,?,?,?,?)";
                 conn.db_execute_many(sql, v_alltk).unwrap();
                 input_something("Have ypu charged wifi machine? enter").unwrap();
                 write_backup_task_to_extask();
@@ -547,6 +654,8 @@ impl Task {
                 clear_contents("todo.txt");
                 clear_contents("date.txt");
             } else if arg == "c" {
+                // nearly discarded
+
                 //   c : check out expect task
                 // manually fill in extask.txt  in advance
                 // loop txt and ask whether a task is finished or not and ask to input desc(through input)
@@ -585,6 +694,9 @@ impl Task {
                 let sql = "INSERT INTO check_expect_task VALUES (?,?,?,?,?)";
                 conn.db_execute_many_ex(sql, v).unwrap();
                 println!("finished check extask out");
+            } else if arg == "a" {
+
+                // other relavent fn needs modification
             } else {
                 //   help out
                 println!("s :summary today's tasks and write to db");
@@ -639,7 +751,7 @@ impl Task {
         )
     }
     /// split string by seo ";;",process data from todo.txt
-    fn psudo_unpack(&mut self, strs: String) {
+    fn psudo_unpack(&mut self, strs: String) -> NewTask {
         let v = strs.split(";;").collect::<Vec<&str>>();
         self.onetaskts.set_begin_ts(&v.get(0).unwrap().to_string());
         self.onetaskts.set_end_ts(&v.get(1).unwrap().to_string());
@@ -647,6 +759,8 @@ impl Task {
             .set_onetask_dur(&v.get(2).unwrap().to_string());
         self.set_task(&v.get(3).unwrap().to_string());
         self.set_detail(&v.get(4).unwrap().to_string());
+        let nt = NewTask::update_from_old_tasks(self, (v.get(5).unwrap(), v.get(6).unwrap()));
+        nt.unwrap()
     }
 }
 
@@ -664,9 +778,9 @@ fn test_intlen() {
 }
 #[test]
 fn test_week() {
-    let weekday=Local::now().weekday().to_string();
-//    Sun
-    println!("{}",weekday);
+    let weekday = Local::now().weekday().to_string();
+    //    Sun
+    println!("{}", weekday);
 }
 #[test]
 fn test_yu() {
@@ -674,4 +788,15 @@ fn test_yu() {
     let r = 124 / 60;
     let x = 124 % 60;
     println!("{}{}", r, x);
+}
+
+#[test]
+fn test_lines() {
+    let cursor = File::open("t.txt").unwrap();
+    let bf = BufReader::new(&cursor);
+    let mut v = vec![];
+    for i in bf.lines() {
+        v.push(i.unwrap())
+    }
+    println!("{:?}", v);
 }
