@@ -232,23 +232,23 @@ fn match_input_task(task_instance: &mut Task, task_str: String, fix_task_vec: Ve
     }
 }
 fn summary_tasks(ntask: &NewTask) {
-    let task_str = format!(
-        "expected schedule {} detail {} \n
-        task: {} detail: {} ,last for {}
-        ",
+    let sched_str = format!(
+        "expected schedule {} detail {} ",
         ntask.expected_behavior,
-        ntask.expected_details,
+        ntask.expected_details,);
+let task_str=format!("task: {} detail: {} ,last for {}",
         ntask.task.task,
         ntask.task.detail,
         ntask.task.onetaskts.dur_to_hm(),
     );
+    append_line_into_file("summary.txt", sched_str);
+
     append_line_into_file("summary.txt", task_str);
 }
 /// create file  if not exist once app starts
 fn init_file() {
     create_ifnotexist("todo.txt");
     create_ifnotexist("date.txt");
-    create_ifnotexist("extask.txt");
     create_ifnotexist("fix_task.txt");
     create_ifnotexist("expect_behavior.txt")
 }
@@ -800,3 +800,4 @@ fn test_lines() {
     }
     println!("{:?}", v);
 }
+
