@@ -241,7 +241,10 @@ let task_str=format!("task: {} detail: {} ,last for {}",
         ntask.task.detail,
         ntask.task.onetaskts.dur_to_hm(),
     );
+    append_line_into_file("summary.txt", "==================".to_owned());
+if  !(ntask.expected_behavior.trim()=="") {
     append_line_into_file("summary.txt", sched_str);
+}
 
     append_line_into_file("summary.txt", task_str);
 }
@@ -318,7 +321,7 @@ fn work_flow(task_instance: &mut Task) {
         } else {
             println!("No Schedule")
         }
-        let detail = input_something("输入工作细节：").unwrap();
+        let detail = input_something("输入工作细节(logic impl)：").unwrap();
         tkits.set_detail(&detail);
 
         // here read ex task and detail from txt
