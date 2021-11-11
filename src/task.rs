@@ -236,6 +236,11 @@ fn summary_tasks(ntask: &NewTask) {
         "expected schedule {} detail {} ",
         ntask.expected_behavior,
         ntask.expected_details,);
+        // add task from to
+        let task_dur=format!("task from {} to {}",
+    ntask.task.onetaskts.begin_ts.return_ts(),
+    ntask.task.onetaskts.end_ts.return_ts()
+);
 let task_str=format!("task: {} detail: {} ,last for {}",
         ntask.task.task,
         ntask.task.detail,
@@ -245,7 +250,7 @@ let task_str=format!("task: {} detail: {} ,last for {}",
 if  !(ntask.expected_behavior.trim()=="") {
     append_line_into_file("summary.txt", sched_str);
 }
-
+append_line_into_file("summary.txt",task_dur);
     append_line_into_file("summary.txt", task_str);
 }
 /// create file  if not exist once app starts
@@ -321,7 +326,10 @@ fn work_flow(task_instance: &mut Task) {
         } else {
             println!("No Schedule")
         }
-        let detail = input_something("输入工作细节(logic impl)：").unwrap();
+        let mut detail = input_something("输入工作细节(logic impl)：").unwrap();
+        if detail=="" {
+            detail="0".to_owned();
+        }
         tkits.set_detail(&detail);
 
         // here read ex task and detail from txt
@@ -368,7 +376,10 @@ fn work_flow(task_instance: &mut Task) {
             let v_fixtask = display_task();
             let task = input_something("input tasknum or plain task：").unwrap();
             match_input_task(tkits.borrow_mut(), task, v_fixtask);
-            let detail = input_something("输入工作细节：").unwrap();
+            let mut  detail = input_something("输入工作细节：").unwrap();
+            if detail=="" {
+                detail="0".to_owned();
+            }
             tkits.set_detail(&detail);
             tkits.onetaskts.calcu_set_onetask_dur();
             // pack task
@@ -650,7 +661,7 @@ impl Task {
                 // print today's task linebyline
                 let sql = "INSERT INTO everydaytask VALUES (?,?,?,?,?,?,?,?,?,?,?,?)";
                 conn.db_execute_many(sql, v_alltk).unwrap();
-                input_something("Have ypu charged wifi machine? enter").unwrap();
+                input_something("Have you charged wifi machine? enter").unwrap();
                 write_backup_task_to_extask();
                 cp_taskdb_to_storage();
                 println!("clear file contents of todo.txt,date.txt");
