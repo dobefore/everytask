@@ -51,6 +51,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "counter"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "63b05d7acd00b53d97b7369c4062027ff55711db0c509f5b28d6d964a2f1ff87"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "fallible-iterator"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -171,6 +180,7 @@ name = "task"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "counter",
  "rusqlite",
 ]
 

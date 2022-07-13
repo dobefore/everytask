@@ -1,9 +1,12 @@
+use crate::error::TaskError;
 use crate::file_op::*;
 use crate::sql_op::Sqlite;
 use chrono::prelude::*;
 
+use counter::Counter;
 use std::borrow::BorrowMut;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fmt::Display;
 use std::fs::{File, OpenOptions};
 use std::io::BufReader;
@@ -12,6 +15,9 @@ use std::{
     env, fs,
     io::{self, prelude::*},
 };
+// two aoms:
+//1.every daynight copy files to local storage
+// 2. end time >= begin time
 trait ToHM {
     fn dur_to_hm(&self) -> String;
 }
@@ -54,6 +60,11 @@ impl Date {
         let path = "date.txt";
         fs::write(path, dt).unwrap()
     }
+    fn write_date_file(fname: &str) {
+        let dt: String = Date::today_date().into();
+        let path = fname;
+        fs::write(path, dt).unwrap()
+    }
 
     fn today_date() -> Self {
         let local = Local::now();
@@ -62,6 +73,11 @@ impl Date {
             month: local.month(),
             day: local.day(),
         }
+    }
+    /// load_date_from_file
+    fn load_date_from_str(s: &str) -> Self {
+        let ds = s.to_owned();
+        ds.into()
     }
     fn load_date_from_file(&mut self) {
         let fp = "date.txt";
@@ -76,7 +92,7 @@ impl Date {
     }
 }
 #[derive(Debug, Default, PartialEq, Clone, Copy)]
-struct TimeStamp {
+pub struct TimeStamp {
     hour: u32,
     minute: u32,
 }
@@ -100,7 +116,9 @@ impl TimeStamp {
     }
     fn current_ts() -> String {
         let local = Local::now();
-        format!("{:02}:{:02}", local.hour(), local.minute())
+        let l = format!("{:02}:{:02}", local.hour(), local.minute());
+
+        l
     }
 }
 #[derive(Debug, Default, PartialEq, Clone, Copy)]
@@ -142,7 +160,12 @@ impl OneTaskTs {
             let g_h = self.begin_ts.hour;
             let g_m = self.begin_ts.minute;
             let b_h = self.end_ts.hour;
+            if b_h < g_h {
+                panic!("begin_ts.hour < end_ts.hour,this should mot happen")
+            }
             let mut b_m = self.end_ts.minute;
+            println!("begin {}{}", g_h, g_m);
+            println!("end {}{}", b_h, b_m);
 
             //  h*60+min
 
@@ -165,10 +188,15 @@ impl OneTaskTs {
                 let h_min = h * 60;
                 (h_min, m_min)
             };
-
+            println!("{}{}", h_min, m_min);
             // sum up all mins
             let sum_min = m_min + h_min;
+            // panic if one task dur > 20h
+            if sum_min > 20 * 60 {
+                panic!("one task dur incorrect {}", sum_min)
+            }
             self.one_task_duration = sum_min;
+
             return;
         }
         println!("DayEndTs stay init state")
@@ -234,23 +262,25 @@ fn match_input_task(task_instance: &mut Task, task_str: String, fix_task_vec: Ve
 fn summary_tasks(ntask: &NewTask) {
     let sched_str = format!(
         "expected schedule {} detail {} ",
-        ntask.expected_behavior,
-        ntask.expected_details,);
-        // add task from to
-        let task_dur=format!("task from {} to {}",
-    ntask.task.onetaskts.begin_ts.return_ts(),
-    ntask.task.onetaskts.end_ts.return_ts()
-);
-let task_str=format!("task: {} detail: {} ,last for {}",
+        ntask.expected_behavior, ntask.expected_details,
+    );
+    // add task from to
+    let task_dur = format!(
+        "task from {} to {}",
+        ntask.task.onetaskts.begin_ts.return_ts(),
+        ntask.task.onetaskts.end_ts.return_ts()
+    );
+    let task_str = format!(
+        "task: {} detail: {} ,last for {}",
         ntask.task.task,
         ntask.task.detail,
         ntask.task.onetaskts.dur_to_hm(),
     );
     append_line_into_file("summary.txt", "==================".to_owned());
-if  !(ntask.expected_behavior.trim()=="") {
-    append_line_into_file("summary.txt", sched_str);
-}
-append_line_into_file("summary.txt",task_dur);
+    if !(ntask.expected_behavior.trim() == "") {
+        append_line_into_file("summary.txt", sched_str);
+    }
+    append_line_into_file("summary.txt", task_dur);
     append_line_into_file("summary.txt", task_str);
 }
 /// create file  if not exist once app starts
@@ -258,20 +288,25 @@ fn init_file() {
     create_ifnotexist("todo.txt");
     create_ifnotexist("date.txt");
     create_ifnotexist("fix_task.txt");
-    create_ifnotexist("expect_behavior.txt")
+    create_ifnotexist("expect_behavior.txt");
+    create_ifnotexist("taskstate.txt");
+    create_ifnotexist("taskstatus.txt");
 }
-/// copy task.db and summary.txt to ./storage/shared/ if weekday is Sat
+/// copy task.db and summary.txt to ./storage/shared/ every day night
 fn cp_taskdb_to_storage() {
     let db = "task.db";
     let sm = "summary.txt";
     let t = "../storage/shared/task.db";
     let smt = "../storage/shared/summary.txt";
-    let weekday = Local::now().weekday().to_string();
-    if weekday == "Sat".to_string() {
-        println!("copy task.db summary.txt to phone storage");
-        fs::copy(db, t).unwrap();
-        fs::copy(sm, smt).unwrap();
-    }
+
+    // copy taskstate.txt
+    let ts = "taskstatus.txt";
+    let tsl = "../storage/shared/taskstatus.txt";
+
+    println!("copy task.db summary.txt to phone storage");
+    fs::copy(db, t).unwrap();
+    fs::copy(sm, smt).unwrap();
+    fs::copy(ts, tsl).unwrap();
 }
 fn get_exptected_task_details() -> (String, String) {
     let mut v = read_alllines_from_file("expect_behavior.txt");
@@ -296,12 +331,13 @@ fn work_flow(task_instance: &mut Task) {
     // get current_ts
     let cur_ts = TimeStamp::current_ts();
     let tkits = task_instance;
-
+    println!("{}", cur_ts);
     // choose task_mode
     let get_task_mode = input_something("input task-mode s:single,m:multi：").unwrap();
     if get_task_mode == "s" {
         //    cur_ts as end_ts
         tkits.onetaskts.set_end_ts(&cur_ts);
+        println!("{}", tkits.onetaskts.end_ts.return_ts());
         // set onedaydur
         tkits.onetaskts.calcu_set_onetask_dur();
         // single task;
@@ -327,8 +363,8 @@ fn work_flow(task_instance: &mut Task) {
             println!("No Schedule")
         }
         let mut detail = input_something("输入工作细节(logic impl)：").unwrap();
-        if detail=="" {
-            detail="0".to_owned();
+        if detail == "" {
+            detail = "0".to_owned();
         }
         tkits.set_detail(&detail);
 
@@ -376,9 +412,9 @@ fn work_flow(task_instance: &mut Task) {
             let v_fixtask = display_task();
             let task = input_something("input tasknum or plain task：").unwrap();
             match_input_task(tkits.borrow_mut(), task, v_fixtask);
-            let mut  detail = input_something("输入工作细节：").unwrap();
-            if detail=="" {
-                detail="0".to_owned();
+            let mut detail = input_something("输入工作细节：").unwrap();
+            if detail == "" {
+                detail = "0".to_owned();
             }
             tkits.set_detail(&detail);
             tkits.onetaskts.calcu_set_onetask_dur();
@@ -543,7 +579,213 @@ pub struct Task {
     pub onetaskts: OneTaskTs,
     pub detail: String,
 }
+/// search word/phrase "抹脚布"，remind me every 3 days
+///
+/// write today's date to local file if today's tasks contain this work .
+///
+/// remind me if thme soan is equal to 3 days
+fn remind_work(v: &Vec<String>) -> io::Result<()> {
+    let p = "mjb.txt";
+    let s = v.join("");
+    if s.contains("抹脚布") {
+        Date::write_date_file(p);
+    } else {
+        let s = read_lastline_from_file(p);
+        if !s.trim().is_empty() {
+            let dt = Date::load_date_from_str(&s);
+            let dt_today = Date::today_date();
+            //    compare date
+            // 2022.1.1 2021.12.30
+            if dt_today.year > dt.year {
+                // set a month as 30 days
+                if dt_today.day + 30 - dt.day == 3 {
+                    println!("It's time to wash 抹脚布");
+                    return Ok(());
+                }
+            }
+            // 7.1 > 6.30
+            if dt_today.month > dt.month {
+                if dt_today.day + 30 - dt.day == 3 {
+                    println!("It's time to wash 抹脚布");
+                    return Ok(());
+                }
+            }
 
+            if dt_today.month == dt.month {
+                if dt_today.day - dt.day == 3 {
+                    println!("It's time to wash 抹脚布");
+                    return Ok(());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+///```
+/// let  l=vec!["我","你","我","我","你"].iter().map(|e|e.to_string()).collect::<Vec<_>>();
+
+/// let word="我";
+/// let o=index_task_vec(&word, &l);
+/// assert_eq!(vec![0,2,3],o);
+/// ```
+fn index_task_vec(task: &str, task_vec: &Vec<String>) -> Vec<u8> {
+    let mut n = 0;
+    let mut v = vec![];
+    for i in task_vec {
+        if task == i {
+            v.push(n);
+        }
+        n += 1;
+    }
+    v
+}
+/// merge dupicated tasks into a single key of map
+fn process_data(dt: TaskPercentage) -> HashMap<String, u16> {
+    let t = dt.tasks;
+    let dur = dt.duration;
+    // remove duplicated tasks
+    let char_counts = t.iter().collect::<Counter<_>>();
+    let mut task_index_dict = HashMap::new();
+    char_counts
+        .keys()
+        .into_iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .clone()
+        .into_iter()
+        .for_each(|i| {
+            let ind = index_task_vec(&i, &t);
+            task_index_dict.insert(i, ind);
+        });
+    let mut final_dict = HashMap::new();
+    task_index_dict.into_iter().for_each(|(k, v)| {
+        let n = get_value_by_index(v, dur.clone());
+        final_dict.insert(k, n);
+    });
+
+    final_dict
+}
+/// index=(1,4)
+///
+/// l=\[1,2,3,4,5]
+///
+/// output:
+///
+/// v1=l[1]=2
+///
+/// v2=l[4]=5
+///
+/// v1+v2=7
+fn get_value_by_index(idx: Vec<u8>, values: Vec<u16>) -> u16 {
+    let mut s = 0;
+    for i in idx {
+        s += values.get::<usize>(i.into()).unwrap()
+    }
+    s
+}
+#[derive(Debug, Default)]
+pub struct PercentageTasks {
+    one_task_dur: u16,
+    task: String,
+}
+impl PercentageTasks {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn set_one_task_dur(mut self, dur: u16) -> Self {
+        self.one_task_dur = dur;
+        self
+    }
+    pub fn set_task(mut self, task: &str) -> Self {
+        self.task = task.to_owned();
+        self
+    }
+}
+#[derive(Debug, Default)]
+struct TaskPercentage {
+    sql_path: String,
+    date: String,
+    tasks: Vec<String>,
+    duration: Vec<u16>,
+}
+impl TaskPercentage {
+    fn new() -> Self {
+        Self::default()
+    }
+    fn path(mut self, path: &str) -> Self {
+        self.sql_path = path.into();
+        self
+    }
+    fn latest_date(mut self) -> Result<Self, TaskError> {
+        let sql = "SELECT date_ FROM everydaytask ORDER BY id DESC";
+        let c = Sqlite::new_conn(&self.sql_path)?;
+        let r = c.fetchone::<String>(sql)?;
+        self.date = r;
+        Ok(self)
+    }
+
+    fn latest_data(mut self) -> Result<Self, TaskError> {
+        let date = &self.date;
+        let sql = format!(
+            "SELECT one_task_dur,task FROM everydaytask WHERE date_='{}'",
+            date
+        );
+        let r = Sqlite::new_conn(&self.sql_path)?.to_percentage_tasks(&sql)?;
+        for i in r {
+            self.tasks.push(i.task);
+            self.duration.push(i.one_task_dur);
+        }
+        Ok(self)
+    }
+}
+fn get_percentage_rounded(x: f32, y: f32) -> String {
+    let ret = (x * 100.0) / y;
+    let rounded = ret.round();
+    format!("{}%", rounded)
+}
+/// describe how much time a task occupied in a workday.
+///
+/// e.g. lunch:1h; a workday 16h.
+///
+///  taks percentage=1*60/16*60
+fn task_percentage_rounded(sql_path: &str) -> Result<(), TaskError> {
+    let t = TaskPercentage::new()
+        .path(sql_path)
+        .latest_date()?
+        .latest_data()?;
+    let s = process_data(t);
+    let all: u16 = s
+        .values()
+        .into_iter()
+        .map(|e| e.to_owned())
+        .collect::<Vec<_>>()
+        .iter()
+        .sum();
+    for (k, v) in s {
+        let percent = get_percentage_rounded(v.into(), all.into());
+        println!(
+            "task: {} || duration: {}min || percentage: {}",
+            k, v, percent
+        );
+    }
+    Ok(())
+}
+/// summary what task I have finished and what I have not finushed yet until today
+///
+/// read  source_fname into a vec of str,write them to dst line by line.
+/// do nothing if file is empty
+fn write_task_status(source_fname: &str, dst_fname: &str, date_str: &str) {
+    let v = read_alllines_from_file(source_fname);
+    if v.is_empty() {
+        return ();
+    }
+    append_line_into_file(dst_fname, date_str.into());
+    for i in v {
+        append_line_into_file(dst_fname, i);
+    }
+    append_line_into_file(dst_fname, "\n".to_owned());
+}
 impl Task {
     fn is_task_instance_default(&self) -> bool {
         if self.date == Date::default()
@@ -601,6 +843,7 @@ impl Task {
     fn set_index(&mut self, idx: u64) {
         self.index = idx;
     }
+
     pub fn start() {
         // init to create
         init_file();
@@ -634,7 +877,7 @@ impl Task {
                     t.dayendts.bed_ts.return_ts(),
                     t.dayendts.dur_to_hm()
                 );
-                append_line_into_file("summary.txt", date_str);
+                append_line_into_file("summary.txt", date_str.clone());
                 append_line_into_file("summary.txt", daydur_str);
 
                 //    get db_last_index from db_query
@@ -643,6 +886,9 @@ impl Task {
                 let mut idx = Sqlite::get_last_index(sql, path);
                 //    generate a vec of tasks
                 let mut v_alltk = vec![];
+
+                // look for word "抹脚布"
+                remind_work(&v_alll).unwrap();
 
                 for line in v_alll {
                     idx += 1;
@@ -658,15 +904,41 @@ impl Task {
                     summary_tasks(&nt);
                 }
                 append_line_into_file("summary.txt", "\n".to_owned());
-                // print today's task linebyline
+
+                // wifi charge
+                loop {
+                    let anwser = input_something("WIFI charge? (Y/N)").unwrap();
+                    let an = anwser.trim().to_uppercase();
+                    if an == "Y" {
+                        append_line_into_file("summary.txt", "WIFI 是否充电：是".to_owned());
+                        break;
+                    } else if an == "N" {
+                        append_line_into_file("summary.txt", "WIFI 是否充电：否".to_owned());
+                        break;
+                    } else {
+                        continue;
+                    }
+                }
+
+                // write taskstate.txt into taskstatus.txt
+                write_task_status("taskstate.txt", "taskstatus.txt", &date_str);
+
+                // write records to database
                 let sql = "INSERT INTO everydaytask VALUES (?,?,?,?,?,?,?,?,?,?,?,?)";
                 conn.db_execute_many(sql, v_alltk).unwrap();
-                input_something("Have you charged wifi machine? enter").unwrap();
+
                 write_backup_task_to_extask();
                 cp_taskdb_to_storage();
                 println!("clear file contents of todo.txt,date.txt");
                 clear_contents("todo.txt");
                 clear_contents("date.txt");
+                clear_contents("taskstate.txt");
+                // use percentage to denote how much time a task is occupied in a workday.
+                task_percentage_rounded("task.db").unwrap();
+            } else if arg == "p" {
+                // means task percentage
+                let sql_path = "task.db";
+                task_percentage_rounded(sql_path).unwrap();
             } else if arg == "c" {
                 // nearly discarded
 
@@ -814,4 +1086,42 @@ fn test_lines() {
     }
     println!("{:?}", v);
 }
+#[test]
+fn test_percentages_task() {
+    let t = PercentageTasks::new().set_one_task_dur(10).set_task("a");
+    println!("{:?}", t);
+}
+/// \['f', 'o', 'e', 't', 'r', 'a', 'b']
+///
+/// \[1, 2, 1, 1, 1, 1, 1]
+#[test]
+fn teest_counter() {
+    let v = vec!["a", "b", "a"];
+    let char_counts = v.iter().collect::<Counter<_>>();
+    let counts_counts = char_counts.values().collect::<Counter<_>>();
+    println!("{:?}", char_counts.keys());
 
+    println!("{:?}", char_counts.values());
+}
+
+#[test]
+fn test_mod() {
+    println!("{ }", 1 / 3);
+}
+#[test]
+fn test_percentage() {
+    let sqlpath = "task.db";
+    task_percentage_rounded(sqlpath).unwrap();
+}
+
+#[test]
+fn test_index_task() {
+    let l = vec!["我", "你", "我", "我", "你"]
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>();
+
+    let word = "我";
+    let o = index_task_vec(&word, &l);
+    assert_eq!(vec![0, 2, 3], o);
+}

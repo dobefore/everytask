@@ -3,7 +3,10 @@ use std::path::Path;
 use rusqlite::OptionalExtension;
 pub use rusqlite::{params, types::FromSql, Connection, Result, Row, RowIndex};
 
-use crate::task::{DayEndTs, NewTask, Task};
+use crate::{
+    error::TaskError,
+    task::{DayEndTs, NewTask, PercentageTasks, Task, TimeStamp},
+};
 pub struct Sqlite {
     pub db: Connection,
 }
@@ -18,7 +21,18 @@ impl Sqlite {
         let s = self.db.query_row(sql, params![], |r| r.get(0))?;
         Ok(s)
     }
-    
+    pub fn to_percentage_tasks(&self, sql: &str) -> Result<Vec<PercentageTasks>, TaskError> {
+        let mut s = self.db.prepare(sql)?;
+        let mut rows = s.query(params![])?;
+        let mut items: Vec<PercentageTasks> = vec![];
+        while let Some(row) = rows.next()? {
+            let r = PercentageTasks::new()
+                .set_one_task_dur(row.get::<usize, u16>(0)?.into())
+                .set_task(&row.get::<usize, String>(1)?);
+            items.push(r);
+        }
+        Ok(items)
+    }
     pub fn fetchall<I: RowIndex + Copy, T: FromSql>(
         &self,
         sql: &str,

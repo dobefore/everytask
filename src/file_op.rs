@@ -19,7 +19,7 @@ pub fn read_alllines_from_file(path: &str) -> Vec<String> {
     let v = fs::read_to_string(path)
         .unwrap()
         .lines()
-        .map(|f| f.to_owned())
+        .map(|f| f.trim().to_owned())
         .collect();
     v
 }
