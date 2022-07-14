@@ -15,5 +15,4 @@ RUN chmod +x /usr/local/bin/task
 # # persist data with a named volume https://docs.docker.com/get-started/05_persisting_data/
 # VOLUME /app
 # COPY --from=builder /usr/src/everydaytask/scripts/ankisyncd.toml /app/ankisyncd.toml
-# CMD ["ankisyncd", "-c","/app/ankisyncd.toml"]
-# EXPOSE 27701
+CMD ["task"]
