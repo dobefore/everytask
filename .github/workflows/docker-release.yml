@@ -19,11 +19,10 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v1
   
-      -
-        name: build
+      - name: build
         run: |
-        docker buildx build  --platform linux/arm64 .
-        docker run --rm --entrypoint cat everydaytask/builder:latest /usr/local/bin/task > task
+          docker buildx build  --platform linux/arm64 .
+          docker run --rm --entrypoint cat everydaytask/builder:latest /usr/local/bin/task > task
       
       - name: Create output directory
         run: mkdir output
