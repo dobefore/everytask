@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::fs::{File, OpenOptions};
 use std::io::BufReader;
+use std::path::Path;
 use std::rc::Rc;
 use std::{
     env, fs,
@@ -291,22 +292,23 @@ fn init_file() {
     create_ifnotexist("expect_behavior.txt");
     create_ifnotexist("taskstate.txt");
     create_ifnotexist("taskstatus.txt");
+    create_ifnotexist( "mjb.txt");
+
+   
+
 }
 /// copy task.db and summary.txt to ./storage/shared/ every day night
 fn cp_taskdb_to_storage() {
-    let db = "task.db";
-    let sm = "summary.txt";
-    let t = "../storage/shared/task.db";
-    let smt = "../storage/shared/summary.txt";
-
-    // copy taskstate.txt
-    let ts = "taskstatus.txt";
-    let tsl = "../storage/shared/taskstatus.txt";
-
-    println!("copy task.db summary.txt to phone storage");
-    fs::copy(db, t).unwrap();
-    fs::copy(sm, smt).unwrap();
-    fs::copy(ts, tsl).unwrap();
+    let p=Path::new("../storage/shared/everydaytask");
+    if !p.exists() {
+        fs::create_dir(p).unwrap();
+    }
+let v=vec!["task.db","summary.txt","taskstatus.txt","task.sh","tasks.sh","taskp.sh"];
+println!("copy task.db summary.txt to phone storage");
+for i in  v{
+    let dst=p.join(i);
+    fs::copy(i, dst).unwrap();
+}   
 }
 fn get_exptected_task_details() -> (String, String) {
     let mut v = read_alllines_from_file("expect_behavior.txt");
@@ -591,8 +593,8 @@ fn remind_work(v: &Vec<String>) -> io::Result<()> {
         Date::write_date_file(p);
     } else {
         let s = read_lastline_from_file(p);
-        if !s.trim().is_empty() {
-            let dt = Date::load_date_from_str(&s);
+        if !s.is_none() {
+            let dt = Date::load_date_from_str(&s.unwrap());
             let dt_today = Date::today_date();
             //    compare date
             // 2022.1.1 2021.12.30
@@ -877,6 +879,33 @@ impl Task {
                     t.dayendts.bed_ts.return_ts(),
                     t.dayendts.dur_to_hm()
                 );
+                // make sure bed time is > 22:00,if so confirm 1 time.
+                // else confirm 3 times if < 22:00
+                let mut count = 0;
+                loop {
+                    let o = input_something(format!(
+                        "are you sure that you want to summary when you're at {}? (y/n)",
+                        t.dayendts.bed_ts.return_ts()
+                    ))
+                    .unwrap();
+                    if t.dayendts.bed_ts.hour >= 22 {
+                        if o.trim().to_ascii_uppercase() == "Y" {
+                            break;
+                        } else {
+                            std::process::abort();
+                        }
+                    } else {
+                        if o.trim().to_ascii_uppercase() != "Y" {
+                            std::process::abort();
+                        }else if  o.trim().to_ascii_uppercase() == "Y" {
+                            count += 1;
+                            if count == 3 {
+                                break;
+                            }
+                        }
+                        continue;
+                    }
+                }
                 append_line_into_file("summary.txt", date_str.clone());
                 append_line_into_file("summary.txt", daydur_str);
 
@@ -903,8 +932,6 @@ impl Task {
                     // write today's jobs tp summary.txt
                     summary_tasks(&nt);
                 }
-                append_line_into_file("summary.txt", "\n".to_owned());
-
                 // wifi charge
                 loop {
                     let anwser = input_something("WIFI charge? (Y/N)").unwrap();
@@ -919,6 +946,7 @@ impl Task {
                         continue;
                     }
                 }
+                append_line_into_file("summary.txt", "\n".to_owned());
 
                 // write taskstate.txt into taskstatus.txt
                 write_task_status("taskstate.txt", "taskstatus.txt", &date_str);
@@ -927,7 +955,7 @@ impl Task {
                 let sql = "INSERT INTO everydaytask VALUES (?,?,?,?,?,?,?,?,?,?,?,?)";
                 conn.db_execute_many(sql, v_alltk).unwrap();
 
-                write_backup_task_to_extask();
+                // write_backup_task_to_extask();
                 cp_taskdb_to_storage();
                 println!("clear file contents of todo.txt,date.txt");
                 clear_contents("todo.txt");
@@ -1016,7 +1044,7 @@ impl Task {
             // false ,start from load task from last line of todo.txt
             let lline = read_lastline_from_file("todo.txt");
             // load to struct from lline
-            tkits.psudo_unpack(lline);
+            tkits.psudo_unpack(lline.unwrap());
             // load date from txt
             tkits.date.load_date_from_file();
             //    set last end_ts as this time begin_ts

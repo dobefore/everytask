@@ -10,10 +10,13 @@ pub fn append_line_into_file(path: &str, strline: String) {
         .unwrap();
     writeln!(f, "{}", strline).unwrap();
 }
-pub fn read_lastline_from_file(path: &str) -> String {
+pub fn read_lastline_from_file(path: &str) -> Option<String> {
     let bf = fs::read_to_string(path).unwrap();
-    let ll = bf.lines().last().unwrap().trim();
-    ll.to_string()
+   match bf.lines().last() {
+       Some(s)=>Some(s.trim().into()),
+       None=>None
+   }  
+   
 }
 pub fn read_alllines_from_file(path: &str) -> Vec<String> {
     let v = fs::read_to_string(path)
