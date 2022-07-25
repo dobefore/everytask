@@ -290,8 +290,9 @@ fn init_file() {
     create_ifnotexist("date.txt");
     create_ifnotexist("fix_task.txt");
     create_ifnotexist("expect_behavior.txt");
-    create_ifnotexist("taskstate.txt");
-    create_ifnotexist("taskstatus.txt");
+    create_ifnotexist("target_today.txt");
+    create_ifnotexist("target_tomorrow.txt");
+    create_ifnotexist("target_all.txt");
     create_ifnotexist( "mjb.txt");
 
    
@@ -303,8 +304,8 @@ fn cp_taskdb_to_storage() {
     if !p.exists() {
         fs::create_dir(p).unwrap();
     }
-let v=vec!["task.db","summary.txt","taskstatus.txt","task.sh","tasks.sh","taskp.sh"];
-println!("copy task.db summary.txt to phone storage");
+let v=vec!["task.db","summary.txt","target_all.txt","task.sh","tasks.sh","taskp.sh"];
+println!("copy files to phone storage");
 for i in  v{
     let dst=p.join(i);
     fs::copy(i, dst).unwrap();
@@ -773,11 +774,13 @@ fn task_percentage_rounded(sql_path: &str) -> Result<(), TaskError> {
     }
     Ok(())
 }
+/// append/write today's targets to a file
+/// 
 /// summary what task I have finished and what I have not finushed yet until today
 ///
 /// read  source_fname into a vec of str,write them to dst line by line.
 /// do nothing if file is empty
-fn write_task_status(source_fname: &str, dst_fname: &str, date_str: &str) {
+fn merge_targets(source_fname: &str, dst_fname: &str, date_str: &str,tomorrow_file:&str) {
     let v = read_alllines_from_file(source_fname);
     if v.is_empty() {
         return ();
@@ -787,6 +790,17 @@ fn write_task_status(source_fname: &str, dst_fname: &str, date_str: &str) {
         append_line_into_file(dst_fname, i);
     }
     append_line_into_file(dst_fname, "\n".to_owned());
+
+    // write contents from tomorrow to today
+    clear_contents(source_fname);
+    let tm = read_alllines_from_file(tomorrow_file);
+    if tm.is_empty() {
+        return ();
+    }
+    for k in tm{
+        append_line_into_file(source_fname, k);
+
+    }
 }
 impl Task {
     fn is_task_instance_default(&self) -> bool {
@@ -948,8 +962,9 @@ impl Task {
                 }
                 append_line_into_file("summary.txt", "\n".to_owned());
 
-                // write taskstate.txt into taskstatus.txt
-                write_task_status("taskstate.txt", "taskstatus.txt", &date_str);
+                // write target_today.txt into target_all.txt
+                // write target_tomorrow.txt to  target_today.txt
+                merge_targets("target_today.txt", "target_all.txt", &date_str,"target_tomorrow.txt");
 
                 // write records to database
                 let sql = "INSERT INTO everydaytask VALUES (?,?,?,?,?,?,?,?,?,?,?,?)";
