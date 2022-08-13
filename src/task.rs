@@ -1,5 +1,6 @@
 use crate::error::TaskError;
 use crate::file_op::*;
+use crate::pay::{Pay, PayItem};
 use crate::sql_op::Sqlite;
 use chrono::prelude::*;
 
@@ -8,9 +9,9 @@ use std::borrow::BorrowMut;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Display;
-use std::fs::{File, OpenOptions};
-use std::io::BufReader;
-use std::path::Path;
+use std::fs::{File, OpenOptions, ReadDir};
+use std::path::{Path, PathBuf};
+use std::process;
 use std::rc::Rc;
 use std::{
     env, fs,
@@ -44,9 +45,10 @@ impl Into<Date> for String {
         }
     }
 }
+/// to_string()
 impl std::fmt::Display for Date {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "({}-{}-{})", self.year, self.month, self.day)
+        write!(f, "{}-{}-{}", self.year, self.month, self.day)
     }
 }
 impl Date {
@@ -75,8 +77,9 @@ impl Date {
             day: local.day(),
         }
     }
+
     /// load_date_from_file
-    fn load_date_from_str(s: &str) -> Self {
+    pub fn load_date_from_str(s: &str) -> Self {
         let ds = s.to_owned();
         ds.into()
     }
@@ -90,6 +93,14 @@ impl Date {
         } else {
             ds.into()
         }
+    }
+
+    pub fn set_day(&mut self, day: u32) {
+        self.day = day;
+    }
+
+    pub fn set_month(&mut self, month: u32) {
+        self.month = month;
     }
 }
 #[derive(Debug, Default, PartialEq, Clone, Copy)]
@@ -112,6 +123,18 @@ impl Into<TimeStamp> for String {
     }
 }
 impl TimeStamp {
+    /// convert u16 int to [`TimeStamp`]
+    fn from_u16(ts: u16) -> Self {
+        let h = ts / 60;
+        let m = ts % 60;
+        Self {
+            hour: h.into(),
+            minute: m.into(),
+        }
+    }
+    fn to_string(&self) -> String {
+        format!("{}h{}min", self.hour, self.minute)
+    }
     fn return_ts(&self) -> String {
         self.to_owned().into()
     }
@@ -293,23 +316,51 @@ fn init_file() {
     create_ifnotexist("target_today.txt");
     create_ifnotexist("target_tomorrow.txt");
     create_ifnotexist("target_all.txt");
-    create_ifnotexist( "mjb.txt");
-
-   
-
+    create_ifnotexist("mjb.txt");
+}
+fn read_dir(path: PathBuf) -> io::Result<Vec<PathBuf>> {
+    let mut paths = vec![];
+    for i in fs::read_dir(path)? {
+        let etr = i?;
+        let p = etr.path();
+        paths.push(p);
+    }
+    Ok(paths)
+}
+/// to aliyun
+fn upload_files_to_cloud() -> io::Result<()> {
+    let d = read_dir(".".into())?;
+    for filename in d {
+        //    allow dir to be uploaded
+        // if filename.is_dir() {
+        //     continue;
+        // }
+        let fname = format!("{}", filename.file_name().unwrap().to_string_lossy());
+        println!("try to upload file/dir {}", fname);
+        process::Command::new("./alidrive_uploader")
+            .args(&["-c", "config.yaml", fname.as_str(), "everydaytask"])
+            .status()
+            .expect("run alidrive_uploader error");
+    }
+    Ok(())
 }
 /// copy task.db and summary.txt to ./storage/shared/ every day night
 fn cp_taskdb_to_storage() {
-    let p=Path::new("../storage/shared/everydaytask");
+    let p = Path::new("../storage/shared/everydaytask");
     if !p.exists() {
         fs::create_dir(p).unwrap();
     }
-let v=vec!["task.db","summary.txt","target_all.txt","task.sh","tasks.sh","taskp.sh"];
-println!("copy files to phone storage");
-for i in  v{
-    let dst=p.join(i);
-    fs::copy(i, dst).unwrap();
-}   
+    let d = read_dir(".".into()).unwrap();
+    // let v=vec!["task.db","summary.txt","target_all.txt","task.sh","tasks.sh","taskp.sh"];
+    println!("copy files to phone storage");
+    for from in d {
+        if from.is_dir() {
+            continue;
+        }
+        // filter filename from path
+        let dst = p.join(format!("{}", from.file_name().unwrap().to_string_lossy()));
+        fs::copy(from, dst).unwrap();
+    }
 }
 fn get_exptected_task_details() -> (String, String) {
     let mut v = read_alllines_from_file("expect_behavior.txt");
@@ -747,6 +798,7 @@ fn get_percentage_rounded(x: f32, y: f32) -> String {
     let rounded = ret.round();
     format!("{}%", rounded)
 }
+
 /// describe how much time a task occupied in a workday.
 ///
 /// e.g. lunch:1h; a workday 16h.
@@ -767,20 +819,21 @@ fn task_percentage_rounded(sql_path: &str) -> Result<(), TaskError> {
         .sum();
     for (k, v) in s {
         let percent = get_percentage_rounded(v.into(), all.into());
+        let ts = TimeStamp::from_u16(v).to_string();
         println!(
             "task: {} || duration: {}min || percentage: {}",
-            k, v, percent
+            k, ts, percent
         );
     }
     Ok(())
 }
 /// append/write today's targets to a file
-/// 
+///
 /// summary what task I have finished and what I have not finushed yet until today
 ///
 /// read  source_fname into a vec of str,write them to dst line by line.
 /// do nothing if file is empty
-fn merge_targets(source_fname: &str, dst_fname: &str, date_str: &str,tomorrow_file:&str) {
+fn merge_targets(source_fname: &str, dst_fname: &str, date_str: &str, tomorrow_file: &str) {
     let v = read_alllines_from_file(source_fname);
     if v.is_empty() {
         return ();
@@ -792,14 +845,21 @@ fn merge_targets(source_fname: &str, dst_fname: &str, date_str: &str,tomorrow_fi
     append_line_into_file(dst_fname, "\n".to_owned());
 
     // write contents from tomorrow to today
+    // prefix each line with numeric order ,1. 2....
     clear_contents(source_fname);
     let tm = read_alllines_from_file(tomorrow_file);
     if tm.is_empty() {
         return ();
     }
-    for k in tm{
+    let mut n = 0;
+    for k in tm {
+        // skip if line is blank/empty in tomorrow
+        if k.trim().is_empty() {
+            continue;
+        }
+        n += 1;
+        let k = format!("{}. {}", n, k);
         append_line_into_file(source_fname, k);
-
     }
 }
 impl Task {
@@ -888,7 +948,7 @@ impl Task {
                 // write date,dayendts to summary file
                 let date_str = format!("date {} {}", t.date.to_string(), t.date.weekday());
                 let daydur_str = format!(
-                    "the day is from {} to {} ,last for {}",
+                    "the day is from {} to {} ,lasted {}",
                     t.dayendts.getup_ts.return_ts(),
                     t.dayendts.bed_ts.return_ts(),
                     t.dayendts.dur_to_hm()
@@ -911,7 +971,7 @@ impl Task {
                     } else {
                         if o.trim().to_ascii_uppercase() != "Y" {
                             std::process::abort();
-                        }else if  o.trim().to_ascii_uppercase() == "Y" {
+                        } else if o.trim().to_ascii_uppercase() == "Y" {
                             count += 1;
                             if count == 3 {
                                 break;
@@ -964,7 +1024,12 @@ impl Task {
 
                 // write target_today.txt into target_all.txt
                 // write target_tomorrow.txt to  target_today.txt
-                merge_targets("target_today.txt", "target_all.txt", &date_str,"target_tomorrow.txt");
+                merge_targets(
+                    "target_today.txt",
+                    "target_all.txt",
+                    &date_str,
+                    "target_tomorrow.txt",
+                );
 
                 // write records to database
                 let sql = "INSERT INTO everydaytask VALUES (?,?,?,?,?,?,?,?,?,?,?,?)";
@@ -978,6 +1043,40 @@ impl Task {
                 clear_contents("taskstate.txt");
                 // use percentage to denote how much time a task is occupied in a workday.
                 task_percentage_rounded("task.db").unwrap();
+            } else if arg == "rpld" {
+                // retrive payment records of last day from db
+              Pay::new(None, None, None).retrieve_records_form_last_day(Some("task.db")).unwrap();
+        
+            } else if arg == "rplm"
+             {
+                Pay::new(None, None, None).retrieve_records_form_last_month(Some("task.db")).unwrap();
+            } 
+        else if arg == "h" {
+                // help: print meaning of these arguments
+                let mut m = HashMap::new();
+                m.insert("rpld", "retrive payment records of last day from db");
+                m.insert("rplm", "retrive payment records of last month from db");
+                m.insert("pay", "write payments to db table pay");
+                m.insert("u", "upload file to aliyundriver");
+                m.insert("p", "print percentage each task occupy");
+                m.insert("s", "summary tasks and write them to a file");
+              m.iter().for_each(|e| println!("{} {}",e.0,e.1));
+            } else if arg == "pay" {
+                // write payments to db table pay in task.db
+                // connect db
+                let conn = Sqlite::new_conn("task.db").unwrap();
+                conn.db.execute_batch(include_str!("create.sql")).unwrap();
+                // read date from file
+                let s = read_lastline_from_file("date.txt").unwrap();
+                let datestr = Date::load_date_from_str(&s);
+                Pay::read_from_file(Some(conn.db), "pay.txt", Some(datestr.to_string()))
+                    .unwrap()
+                    .add_to_db()
+                    .unwrap()
+                    .clear_file();
+            } else if arg == "u" {
+                // means upload file to aliyundriver
+                upload_files_to_cloud().unwrap();
             } else if arg == "p" {
                 // means task percentage
                 let sql_path = "task.db";
@@ -1121,6 +1220,7 @@ fn test_yu() {
 
 #[test]
 fn test_lines() {
+    use std::io::BufReader;
     let cursor = File::open("t.txt").unwrap();
     let bf = BufReader::new(&cursor);
     let mut v = vec![];
@@ -1149,7 +1249,11 @@ fn teest_counter() {
 
 #[test]
 fn test_mod() {
-    println!("{ }", 1 / 3);
+    // 2
+    println!("{ }", 120 / 60);
+    // 30
+    println!("{ }", 30 % 60);
+    println!("{ }", 120 % 60);
 }
 #[test]
 fn test_percentage() {
@@ -1167,4 +1271,17 @@ fn test_index_task() {
     let word = "我";
     let o = index_task_vec(&word, &l);
     assert_eq!(vec![0, 2, 3], o);
+}
+
+#[test]
+fn test_readdir() {
+    let p = read_dir(".".into()).unwrap();
+    println!(
+        "{:?}",
+        p.iter()
+            .map(|e| e.file_name().unwrap().to_string_lossy())
+            .collect::<Vec<_>>()
+    );
+    // [".\\.git", ".\\.github", ".\\.gitignore",]
+    println!("{:?}", p);
 }
