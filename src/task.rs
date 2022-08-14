@@ -313,9 +313,9 @@ fn init_file() {
     create_ifnotexist("date.txt");
     create_ifnotexist("fix_task.txt");
     create_ifnotexist("expect_behavior.txt");
-    create_ifnotexist("target_today.txt");
-    create_ifnotexist("target_tomorrow.txt");
-    create_ifnotexist("target_all.txt");
+    create_ifnotexist("today_target.txt");
+    create_ifnotexist("tomorrow_target.txt");
+    create_ifnotexist("all_target.txt");
     create_ifnotexist("mjb.txt");
 }
 fn read_dir(path: PathBuf) -> io::Result<Vec<PathBuf>> {
@@ -1025,10 +1025,10 @@ impl Task {
                 // write target_today.txt into target_all.txt
                 // write target_tomorrow.txt to  target_today.txt
                 merge_targets(
-                    "target_today.txt",
-                    "target_all.txt",
+                    "today_target.txt",
+                    "all_target.txt",
                     &date_str,
-                    "target_tomorrow.txt",
+                    "tomorrow_target.txt",
                 );
 
                 // write records to database
@@ -1045,22 +1045,28 @@ impl Task {
                 task_percentage_rounded("task.db").unwrap();
             } else if arg == "rpld" {
                 // retrive payment records of last day from db
-              Pay::new(None, None, None).retrieve_records_form_last_day(Some("task.db")).unwrap();
-        
-            } else if arg == "rplm"
-             {
-                Pay::new(None, None, None).retrieve_records_form_last_month(Some("task.db")).unwrap();
-            } 
-        else if arg == "h" {
+                Pay::new(None, None, None)
+                    .retrieve_records_form_last_day(Some("task.db"))
+                    .unwrap();
+            } else if arg == "rplm" {
+                Pay::new(None, None, None)
+                    .retrieve_records_form_last_month(Some("task.db"))
+                    .unwrap();
+            } else if arg == "rptm" {
+                Pay::new(None, None, None)
+                    .retrieve_records_form_this_month(Some("task.db"))
+                    .unwrap();
+            } else if arg == "h" {
                 // help: print meaning of these arguments
                 let mut m = HashMap::new();
                 m.insert("rpld", "retrive payment records of last day from db");
                 m.insert("rplm", "retrive payment records of last month from db");
+                m.insert("rptm", "retrive payment records of this month from db");
                 m.insert("pay", "write payments to db table pay");
                 m.insert("u", "upload file to aliyundriver");
                 m.insert("p", "print percentage each task occupy");
                 m.insert("s", "summary tasks and write them to a file");
-              m.iter().for_each(|e| println!("{} {}",e.0,e.1));
+                m.iter().for_each(|e| println!("{} {}", e.0, e.1));
             } else if arg == "pay" {
                 // write payments to db table pay in task.db
                 // connect db
