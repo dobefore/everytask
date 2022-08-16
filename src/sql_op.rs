@@ -16,6 +16,11 @@ impl Sqlite {
             db: Connection::open(path)?,
         })
     }
+    /// create table if not exists
+    pub fn create_table_pay(&self) -> Result<()> {
+        self.db.execute_batch(include_str!("create.sql"))?;
+        Ok(())
+    }
     /// query lastone row
     pub fn fetchone<T: FromSql>(&self, sql: &str) -> Result<T> {
         let s = self.db.query_row(sql, params![], |r| r.get(0))?;

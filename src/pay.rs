@@ -36,11 +36,9 @@ impl Pay {
         let conn = Sqlite::new_conn(db.unwrap()).unwrap();
         conn.db.execute_batch(include_str!("create.sql")).unwrap();
         self.set_conn(Some(conn.db));
-        let res = self.retrieve_records(true, false, false).unwrap();
+        let res = self.retrieve_records(true, false, false, false)?;
         if let Some(r) = res {
-            for pi in r {
-                println!("{}", pi?);
-            }
+            r.iter().for_each(|pi| println!("{}", pi));
         }
 
         Ok(())
@@ -50,11 +48,9 @@ impl Pay {
         let conn = Sqlite::new_conn(db.unwrap()).unwrap();
         conn.db.execute_batch(include_str!("create.sql")).unwrap();
         self.set_conn(Some(conn.db));
-        let res = self.retrieve_records(false, true, false).unwrap();
+        let res = self.retrieve_records(false, true, false, false)?;
         if let Some(r) = res {
-            for pi in r {
-                println!("{}", pi?);
-            }
+            r.iter().for_each(|pi| println!("{}", pi));
         }
         Ok(())
     }
@@ -64,11 +60,9 @@ impl Pay {
         let conn = Sqlite::new_conn(db.unwrap()).unwrap();
         conn.db.execute_batch(include_str!("create.sql")).unwrap();
         self.set_conn(Some(conn.db));
-        let res = self.retrieve_records(false, false, true).unwrap();
+        let res = self.retrieve_records(false, false, true, false)?;
         if let Some(r) = res {
-            for pi in r {
-                println!("{}", pi?);
-            }
+            r.iter().for_each(|pi| println!("{}", pi));
         }
         Ok(())
     }
@@ -78,7 +72,29 @@ impl Pay {
         last_day: bool,
         last_month: bool,
         this_month: bool,
-    ) -> Result<Option<Vec<result::Result<PayItem, rusqlite::Error>>>> {
+        all: bool,
+    ) -> Result<Option<Vec<PayItem>>> {
+        if all {
+            let sql = "SELECT date_,item,price,amounts,category FROM pay";
+            let mut stmt = self.conn.as_ref().unwrap().prepare(sql)?;
+            let pis = stmt
+                .query_map([], |row| {
+                    Ok(PayItem {
+                        date: row.get(0)?,
+                        item: row.get(1)?,
+                        price: row.get(2)?,
+                        amounts: row.get(3)?,
+                        category: row.get(4)?,
+                    })
+                })?
+                .collect::<Vec<_>>();
+
+            let mut r = vec![];
+            for i in pis {
+                r.push(i?)
+            }
+            return Ok(Some(r));
+        }
         if last_day {
             let ld = self.last_day();
             let sql = "SELECT date_,item,price,amounts,category FROM pay where date_=?";
@@ -94,7 +110,11 @@ impl Pay {
                     })
                 })?
                 .collect::<Vec<_>>();
-            return Ok(Some(pis));
+            let mut r = vec![];
+            for i in pis {
+                r.push(i?)
+            }
+            return Ok(Some(r));
         }
         if last_month {
             // 模糊查询 带有 月份的date
@@ -113,12 +133,16 @@ impl Pay {
                         date: row.get(0)?,
                         item: row.get::<_, String>(1)?.into(),
                         price: row.get(2)?,
-                        amounts: row.get::<_, u16>(3)?.into(),
+                        amounts: row.get::<_, String>(3)?.into(),
                         category: row.get(4)?,
                     })
                 })?
                 .collect::<Vec<_>>();
-            return Ok(Some(pis));
+            let mut r = vec![];
+            for i in pis {
+                r.push(i?)
+            }
+            return Ok(Some(r));
         }
         if this_month {
             // 模糊查询 带有 月份的date
@@ -137,12 +161,16 @@ impl Pay {
                         date: row.get(0)?,
                         item: row.get::<_, String>(1)?.into(),
                         price: row.get(2)?,
-                        amounts: row.get::<_, u16>(3)?.into(),
+                        amounts: row.get::<_, String>(3)?.into(),
                         category: row.get(4)?,
                     })
                 })?
                 .collect::<Vec<_>>();
-            return Ok(Some(pis));
+            let mut r = vec![];
+            for i in pis {
+                r.push(i?)
+            }
+            return Ok(Some(r));
         }
         Ok(None)
     }
@@ -177,6 +205,9 @@ impl Pay {
     fn drop_table(&self) -> Result<()> {
         let sql = "DROP TABLE pay;";
         self.conn.as_ref().unwrap().execute(sql, [])?;
+        Ok(())
+    }
+    fn update_db(&mut self) -> Result<()> {
         Ok(())
     }
     /// return payitems from db
@@ -228,14 +259,19 @@ impl Pay {
     pub fn set_conn(&mut self, conn: Option<Connection>) {
         self.conn = conn;
     }
+
+    pub fn set_payitem(&mut self, payitem: Option<Vec<PayItem>>) -> &mut Self {
+        self.payitem = payitem;
+        self
+    }
 }
 
 #[derive(Debug, Default)]
 pub struct PayItem {
     item: Option<String>,
     date: Option<String>,
-    price: Option<f32>,
-    amounts: Option<u16>,
+    price: Option<String>,
+    amounts: Option<String>,
     category: Option<String>,
 }
 impl Display for PayItem {
@@ -244,8 +280,8 @@ impl Display for PayItem {
             f,
             "{}, price:{},amounts: {}, category: {},date: {}",
             self.item.as_ref().unwrap(),
-            self.price.unwrap(),
-            self.amounts.unwrap(),
+            self.price.as_ref().unwrap(),
+            self.amounts.as_ref().unwrap(),
             self.category.as_ref().unwrap(),
             self.date.as_ref().unwrap()
         )
@@ -255,8 +291,8 @@ impl PayItem {
     fn new(
         item: Option<String>,
         date: Option<String>,
-        price: Option<f32>,
-        amounts: Option<u16>,
+        price: Option<String>,
+        amounts: Option<String>,
         category: Option<String>,
     ) -> Self {
         Self {
@@ -275,7 +311,12 @@ impl PayItem {
         m
     }
     /// update date of pay db
-    fn update_date(&self) {}
+    fn update_date(&self) {
+        // take out existing records from db
+        // drop table
+
+        // re-insert records to db
+    }
     /// impl from <string> ,separated by ','
     pub fn from_string(s: &str, date: Option<String>) -> Result<Self> {
         let r = s.split(',').collect::<Vec<&str>>();
@@ -291,7 +332,7 @@ impl PayItem {
         let price: result::Result<_, TaskError> = if price.is_empty() {
             Err(CustomError::ValueEmpty("price".into()).into())
         } else {
-            Ok(price.parse::<_>()?)
+            Ok(price.parse::<f32>()?.to_string())
         };
         let category = if r.len() == 3 || r.len() == 4 {
             let category = r.get(2).unwrap().trim().to_string();
@@ -310,15 +351,15 @@ impl PayItem {
             Ok("默认".into())
         };
         // amounts : parse string to u8 if len of fields is 4 ,else return 0 denoting default value
-        let amounts: result::Result<_, TaskError> = if r.len() == 4 {
+        let amounts = if r.len() == 4 {
             let amounts = r.get(3).unwrap().trim();
             if amounts.is_empty() {
-                Ok(0u16)
+                "默认"
             } else {
-                Ok(amounts.parse::<_>()?)
+                amounts
             }
         } else {
-            Ok(0)
+            "默认"
         };
         // : merge 2,3,4
         let len_of_fields = r.len();
@@ -328,7 +369,7 @@ impl PayItem {
                 Some(item?),
                 date,
                 Some(price?),
-                Some(amounts?),
+                Some(amounts.into()),
                 Some(category?),
             ));
         } else {
@@ -343,8 +384,23 @@ impl PayItem {
 }
 
 // from db
-// #[test]
-// fn test_drop_table() {
-//     let s=Sqlite::new_conn("task.db").unwrap();
-//     Pay::new(Some(&s.db), None, None).drop_table().unwrap();
-// }
+#[test]
+fn test_drop_table() {
+    let s1 = Sqlite::new_conn(r"C:\Users\Admin\Desktop\task.db").unwrap();
+    let s2 = Sqlite::new_conn("task.db").unwrap();
+
+    // create 2 Pay instance,one from destop ,another from current path
+    let mut p1 = Pay::new(Some(s1.db), None, None);
+    let mut p2 = Pay::new(Some(s2.db), None, None);
+    let r = p2.retrieve_records(false, false, false, true).unwrap();
+
+    for i in r.unwrap() {
+        println!("{:?}", i)
+    }
+}
+#[test]
+fn test_float_str() {
+    let f = 4.2f32;
+    let f1 = "4.2".parse::<f32>().unwrap();
+    println!("{}", f1.to_string())
+}

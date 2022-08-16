@@ -30,6 +30,6 @@ create table if not exists pay (
     item VARCHAR(30),
     -- be string in case infinite fraction
     price VARCHAR(30),
-    amounts integer ,
+    amounts VARCHAR(30) ,
     category VARCHAR(30)
 )
