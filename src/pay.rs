@@ -319,7 +319,7 @@ impl PayItem {
     }
     /// impl from <string> ,separated by ','
     pub fn from_string(s: &str, date: Option<String>) -> Result<Self> {
-        let r = s.split(',').collect::<Vec<&str>>();
+        let r = s.split('，').collect::<Vec<&str>>();
         let categories = PayItem::category();
         let item = r.get(0).unwrap().trim().to_string();
         let price = r.get(1).unwrap().trim();
