@@ -5,7 +5,7 @@ pub use rusqlite::{params, types::FromSql, Connection, Result, Row, RowIndex};
 
 use crate::{
     error::TaskError,
-    task::{DayEndTs, NewTask, PercentageTasks, Task, TimeStamp},
+    task::{PercentageTasks, Task},
 };
 pub struct Sqlite {
     pub db: Connection,
@@ -109,7 +109,7 @@ fn to_task(row: &Row) -> Result<Task> {
 #[test]
 fn test_table_field() {
     let q = "select * from everytask";
-    let s = "SELECT sql FROM sqlite_master WHERE type = 'table' AND tbl_name = 'everytask';";
+    let _s = "SELECT sql FROM sqlite_master WHERE type = 'table' AND tbl_name = 'everytask';";
     let c = Sqlite::new_conn("task.db").unwrap();
     let a: Vec<usize> = c.fetchall(q, 7).unwrap();
     println!("{:?}", a);
@@ -117,6 +117,7 @@ fn test_table_field() {
 ///fetch all old tasks rec write to newtask
 #[test]
 fn test_fetchall_write_newtask() -> Result<()> {
+    use crate::task::NewTask;
     let db = Connection::open("task.db").unwrap();
     let mut s = db.prepare("select * from everytask").unwrap();
     let rows = s.query_and_then([], |row| to_task(row)).unwrap();

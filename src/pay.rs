@@ -390,8 +390,8 @@ fn test_drop_table() {
     let s2 = Sqlite::new_conn("task.db").unwrap();
 
     // create 2 Pay instance,one from destop ,another from current path
-    let mut p1 = Pay::new(Some(s1.db), None, None);
-    let mut p2 = Pay::new(Some(s2.db), None, None);
+    let _p1 = Pay::new(Some(s1.db), None, None);
+    let p2 = Pay::new(Some(s2.db), None, None);
     let r = p2.retrieve_records(false, false, false, true).unwrap();
 
     for i in r.unwrap() {
@@ -400,7 +400,7 @@ fn test_drop_table() {
 }
 #[test]
 fn test_float_str() {
-    let f = 4.2f32;
+    let _f = 4.2f32;
     let f1 = "4.2".parse::<f32>().unwrap();
     println!("{}", f1.to_string())
 }

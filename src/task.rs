@@ -1,6 +1,6 @@
 use crate::error::TaskError;
 use crate::file_op::*;
-use crate::pay::{Pay, PayItem};
+use crate::pay::{Pay};
 use crate::sql_op::Sqlite;
 use chrono::prelude::*;
 
@@ -9,7 +9,7 @@ use std::borrow::BorrowMut;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Display;
-use std::fs::{File, OpenOptions, ReadDir};
+use std::fs::{OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::rc::Rc;
@@ -1218,7 +1218,7 @@ fn test_week() {
 }
 #[test]
 fn test_yu() {
-    let s = 30;
+    let _s = 30;
     let r = 124 / 60;
     let x = 124 % 60;
     println!("{}{}", r, x);
@@ -1226,6 +1226,7 @@ fn test_yu() {
 
 #[test]
 fn test_lines() {
+    use std::fs::File;
     use std::io::BufReader;
     let cursor = File::open("t.txt").unwrap();
     let bf = BufReader::new(&cursor);
@@ -1247,7 +1248,7 @@ fn test_percentages_task() {
 fn teest_counter() {
     let v = vec!["a", "b", "a"];
     let char_counts = v.iter().collect::<Counter<_>>();
-    let counts_counts = char_counts.values().collect::<Counter<_>>();
+    let _counts_counts = char_counts.values().collect::<Counter<_>>();
     println!("{:?}", char_counts.keys());
 
     println!("{:?}", char_counts.values());
