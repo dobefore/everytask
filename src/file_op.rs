@@ -1,45 +1,54 @@
+use crate::error::Result;
 use std::fs::{self, OpenOptions};
-use std::io::prelude::*;
+use std::io::{self, Write};
 use std::path::Path;
-
-pub fn append_line_into_file(path: &str, strline: String) {
-    let mut f = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .unwrap();
-    writeln!(f, "{}", strline).unwrap();
+pub(crate) fn open_as_append(path: &str) -> io::Result<std::fs::File> {
+    let f = OpenOptions::new().create(true).append(true).open(path)?;
+    Ok(f)
 }
-pub fn read_lastline_from_file(path: &str) -> Option<String> {
-    let bf = fs::read_to_string(path).unwrap();
-    match bf.lines().last() {
-        Some(s) => Some(s.trim().into()),
-        None => None,
+pub(crate) fn open_as_read(path: &str) -> io::Result<std::fs::File> {
+    let f = fs::File::open(path)?;
+    Ok(f)
+}
+pub fn append_line(file: &mut std::fs::File, strline: &str) -> io::Result<()> {
+    writeln!(file, "{}", strline)?;
+    Ok(())
+}
+pub fn read_lastline(path: &str) -> Result<Option<String>> {
+    let bf = read_lines(path)?;
+    match bf.last() {
+        Some(s) => Ok(Some(s.trim().into())),
+        None => Ok(None),
     }
 }
-pub fn read_alllines_from_file(path: &str) -> Vec<String> {
-    let v = fs::read_to_string(path)
-        .unwrap()
+/// read lines from file
+///
+/// filter lines whose contents are not empty out
+pub fn read_lines(path: &str) -> Result<Vec<String>> {
+    let v = fs::read_to_string(path)?
         .lines()
         .map(|f| f.trim().to_owned())
+        .filter(|e| !e.is_empty())
         .collect();
-    v
+    Ok(v)
 }
-pub fn file_contents_empty(path: &str) -> bool {
-    let bf = fs::read_to_string(path).unwrap();
-    if bf.trim() == "" {
-        return true;
+pub fn file_empty(path: &str) -> io::Result<bool> {
+    let bf = fs::read_to_string(path)?;
+    if bf.trim().is_empty() {
+        return Ok(true);
     }
-    false
+    Ok(false)
 }
 
-pub fn clear_contents(path: &str) {
-    fs::write(path, "").unwrap();
+pub fn clear_contents(path: &str) -> io::Result<()> {
+    fs::write(path, "")?;
+    Ok(())
 }
 /// return true if todo.txt empty
-pub fn create_ifnotexist(path: &str) {
+pub fn create_file(path: &str) -> io::Result<()> {
     if !Path::new(path).exists() {
-        fs::File::create(path).unwrap();
+        fs::File::create(path)?;
         println!("created file {}", path)
     }
+    Ok(())
 }

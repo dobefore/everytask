@@ -1,11 +1,10 @@
-
 use std::error::Error;
 use std::fmt;
 use std::io;
 use std::num;
 use std::result;
 pub type Result<T> = result::Result<T, TaskError>;
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TaskError {
     kind: String,
     message: String,
@@ -16,6 +15,7 @@ pub enum CustomError {
     ParsePayItemError(String),
     ValueEmpty(String),
     ValueNotFound(String),
+    OutOfIndex(String),
 }
 impl fmt::Display for CustomError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -27,6 +27,9 @@ impl fmt::Display for CustomError {
                 write!(f, "{}", v)
             }
             Self::ValueNotFound(v) => {
+                write!(f, "{}", v)
+            }
+            Self::OutOfIndex(v) => {
                 write!(f, "{}", v)
             }
         }
@@ -54,6 +57,10 @@ impl From<CustomError> for TaskError {
                 kind: String::from("value not found"),
                 message: error.to_string(),
             },
+            CustomError::OutOfIndex(e) => TaskError {
+                kind: String::from("index out of range"),
+                message: e,
+            },
         }
     }
 }
@@ -66,7 +73,14 @@ impl From<io::Error> for TaskError {
         }
     }
 }
-
+impl From<regex::Error> for TaskError {
+    fn from(error: regex::Error) -> Self {
+        TaskError {
+            kind: String::from("regex"),
+            message: error.to_string(),
+        }
+    }
+}
 // Implement std::convert::From for AppError; from num::ParseIntError
 impl From<num::ParseIntError> for TaskError {
     fn from(error: num::ParseIntError) -> Self {

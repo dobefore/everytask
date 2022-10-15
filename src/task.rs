@@ -1,22 +1,38 @@
-use crate::error::TaskError;
+use crate::error::CustomError;
+use crate::error::Result;
 use crate::file_op::*;
-use crate::pay::{Pay};
-use crate::sql_op::Sqlite;
+use crate::parse_args::{Args, DBOption, RetrieveCommand};
+use crate::pay::{write_pay, Pay};
+use crate::sql_op::fetch_all;
+use crate::sql_op::fetch_one;
+use crate::sql_op::open_db;
+use crate::task_handle::capture_task;
+use crate::task_handle::move_task;
+use crate::task_handle::roots_marked;
+use crate::task_handle::roots_not_marked;
+use crate::task_handle::RootTask;
 use chrono::prelude::*;
-
 use counter::Counter;
-use std::borrow::BorrowMut;
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Display;
-use std::fs::{OpenOptions};
-use std::path::{Path, PathBuf};
+
 use std::process;
-use std::rc::Rc;
 use std::{
-    env, fs,
-    io::{self, prelude::*},
+    fs,
+    io::{self, Write},
 };
+
+pub(crate) static TODO_FILE: &str = "todo.txt";
+pub(crate) static PAY_FILE: &str = "pay.txt";
+pub(crate) static TASK_DB_FILE: &str = "task.db";
+pub(crate) static SUMMARY_FILE: &str = "summary.txt";
+pub(crate) static DATE_FILE: &str = "date.txt";
+pub(crate) static TASK_CANDIDATES: &str = "task_candidates.txt";
+pub(crate) static ALL_TASKS: &str = "all_tasks.txt";
+pub(crate) static TODAY_TASKS: &str = "today_tasks.txt";
+pub(crate) static TOMORROW_TASKS: &str = "tomorrow_tasks.txt";
+pub(crate) static MONTH_FILE: &str = "months.txt";
+pub(crate) static ALIDRIVE_CMD: &str = "./alidrive_uploader";
 // two aoms:
 //1.every daynight copy files to local storage
 // 2. end time >= begin time
@@ -52,24 +68,23 @@ impl std::fmt::Display for Date {
     }
 }
 impl Date {
-    fn weekday(&self) -> String {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn weekday(&self) -> String {
         let local = Local::now();
         let y = local.year();
         let local_dt = Local.ymd(y, self.month, self.day);
         local_dt.weekday().to_string()
     }
-    fn write_date() {
+    fn write_date() -> Result<()> {
         let dt: String = Date::today_date().into();
-        let path = "date.txt";
-        fs::write(path, dt).unwrap()
-    }
-    fn write_date_file(fname: &str) {
-        let dt: String = Date::today_date().into();
-        let path = fname;
-        fs::write(path, dt).unwrap()
+        fs::write(DATE_FILE, dt)?;
+        Ok(())
     }
 
-    fn today_date() -> Self {
+    pub(crate) fn today_date() -> Self {
         let local = Local::now();
         Self {
             year: local.year() as u32,
@@ -83,16 +98,20 @@ impl Date {
         let ds = s.to_owned();
         ds.into()
     }
-    fn load_date_from_file(&mut self) {
-        let fp = "date.txt";
-        let ds = fs::read_to_string(fp).unwrap().trim().to_owned();
-        *self = if ds == "" {
-            println!("no date in file");
+    /// load date from file,and set it as current date
+    pub(crate) fn load_set_date(&mut self) -> Result<()> {
+        let ds = fs::read_to_string(DATE_FILE)?.trim().to_owned();
+        let dt: Date = if ds == "" {
+            eprintln!("no date in file");
             let dt: String = Date::today_date().into();
             dt.into()
         } else {
             ds.into()
-        }
+        };
+        self.set_day(dt.day);
+        self.set_month(dt.month);
+        self.set_year(dt.year);
+        Ok(())
     }
 
     pub fn set_day(&mut self, day: u32) {
@@ -102,11 +121,20 @@ impl Date {
     pub fn set_month(&mut self, month: u32) {
         self.month = month;
     }
+
+    pub fn set_year(&mut self, year: u32) {
+        self.year = year;
+    }
 }
 #[derive(Debug, Default, PartialEq, Clone, Copy)]
 pub struct TimeStamp {
     hour: u32,
     minute: u32,
+}
+impl Display for TimeStamp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:02}:{:02}", self.hour, self.minute)
+    }
 }
 impl From<TimeStamp> for String {
     fn from(ts: TimeStamp) -> Self {
@@ -115,7 +143,10 @@ impl From<TimeStamp> for String {
 }
 impl Into<TimeStamp> for String {
     fn into(self) -> TimeStamp {
-        let v: Vec<u32> = self.split(":").map(|r| r.parse::<u32>().unwrap()).collect();
+        let v: Vec<u32> = self
+            .split(":")
+            .filter_map(|r| r.parse::<u32>().ok())
+            .collect();
         TimeStamp {
             hour: v.get(0).unwrap().to_owned(),
             minute: v.get(1).unwrap().to_owned(),
@@ -123,6 +154,10 @@ impl Into<TimeStamp> for String {
     }
 }
 impl TimeStamp {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     /// convert u16 int to [`TimeStamp`]
     fn from_u16(ts: u16) -> Self {
         let h = ts / 60;
@@ -132,17 +167,25 @@ impl TimeStamp {
             minute: m.into(),
         }
     }
-    fn to_string(&self) -> String {
-        format!("{}h{}min", self.hour, self.minute)
-    }
+
     fn return_ts(&self) -> String {
         self.to_owned().into()
     }
-    fn current_ts() -> String {
+    fn current_ts() -> TimeStamp {
         let local = Local::now();
-        let l = format!("{:02}:{:02}", local.hour(), local.minute());
+        // let l = format!("{:02}:{:02}", local.hour(), local.minute());
+        let mut ts = TimeStamp::new();
+        ts.set_hour(local.hour());
+        ts.set_minute(local.minute());
+        ts
+    }
 
-        l
+    pub fn set_hour(&mut self, hour: u32) {
+        self.hour = hour;
+    }
+
+    pub fn set_minute(&mut self, minute: u32) {
+        self.minute = minute;
     }
 }
 #[derive(Debug, Default, PartialEq, Clone, Copy)]
@@ -169,14 +212,18 @@ impl From<(String, String, u32)> for OneTaskTs {
     }
 }
 impl OneTaskTs {
-    fn set_onetask_dur(&mut self, dur: &String) {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn load_dur_from_str(&mut self, dur: &str) {
         let i = dur.parse::<u32>().unwrap();
         self.one_task_duration = i
     }
-    fn set_end_ts(&mut self, ts: &String) {
+    fn load_end_ts_from_str(&mut self, ts: &str) {
         self.end_ts = ts.to_owned().into()
     }
-    fn set_begin_ts(&mut self, ts: &String) {
+    fn load_begin_ts_from_str(&mut self, ts: &str) {
         self.begin_ts = ts.to_owned().into()
     }
     fn calcu_set_onetask_dur(&mut self) {
@@ -188,9 +235,6 @@ impl OneTaskTs {
                 panic!("begin_ts.hour < end_ts.hour,this should mot happen")
             }
             let mut b_m = self.end_ts.minute;
-            println!("begin {}{}", g_h, g_m);
-            println!("end {}{}", b_h, b_m);
-
             //  h*60+min
 
             let (h_min, m_min) = if b_m < g_m {
@@ -212,7 +256,6 @@ impl OneTaskTs {
                 let h_min = h * 60;
                 (h_min, m_min)
             };
-            println!("{}{}", h_min, m_min);
             // sum up all mins
             let sum_min = m_min + h_min;
             // panic if one task dur > 20h
@@ -225,26 +268,42 @@ impl OneTaskTs {
         }
         println!("DayEndTs stay init state")
     }
-    fn return_ts_dur_line(&self) -> String {
-        format!(
-            "{};;{};;{}",
-            self.begin_ts.return_ts(),
-            self.end_ts.return_ts(),
-            self.one_task_duration.to_string()
-        )
+
+    pub fn begin_ts(&self) -> TimeStamp {
+        self.begin_ts
+    }
+
+    pub fn end_ts(&self) -> TimeStamp {
+        self.end_ts
+    }
+
+    pub fn one_task_duration(&self) -> u32 {
+        self.one_task_duration
+    }
+
+    pub fn set_begin_ts(&mut self, begin_ts: TimeStamp) {
+        self.begin_ts = begin_ts;
+    }
+
+    pub fn set_end_ts(&mut self, end_ts: TimeStamp) {
+        self.end_ts = end_ts;
+    }
+
+    pub fn set_one_task_duration(&mut self, one_task_duration: u32) {
+        self.one_task_duration = one_task_duration;
     }
 }
 fn input_something<T: AsRef<str> + Display>(text_hint: T) -> io::Result<String> {
     print!("{}", text_hint);
-    io::stdout().flush().unwrap();
+    io::stdout().flush()?;
     let mut bf = String::new();
     io::stdin().read_line(&mut bf)?;
 
     Ok(bf.trim().to_owned())
 }
 /// print out fixed tasks from file line by line
-fn display_task() -> Vec<String> {
-    let v = fs::read_to_string("fix_task.txt").unwrap();
+fn display_task() -> Result<Vec<String>> {
+    let v = fs::read_to_string(TASK_CANDIDATES)?;
     let mut n = 0;
     let mut vv = vec![];
     for l in v.lines() {
@@ -252,236 +311,43 @@ fn display_task() -> Vec<String> {
         println!("{}  {}", n, &l);
         vv.push(l.to_owned());
     }
-    vv
+    Ok(vv)
 }
 /// set task of task_instance  by input num or plain task
-fn match_input_task(task_instance: &mut Task, task_str: String, fix_task_vec: Vec<String>) {
-    let vlen = fix_task_vec.len() as u32;
-    let v = (1..=vlen)
-        .into_iter()
-        .map(|r| r.to_string())
-        .collect::<Vec<_>>();
-    let vs = v.join("");
+fn match_task(task_str: String, fix_task_vec: Vec<String>) -> Result<String> {
+    let vlen = fix_task_vec.len();
     let s = task_str.parse::<u32>();
     match s {
         Ok(x) => {
-            if !vs.contains(&x.to_string()) {
+            if x > vlen as u32 {
                 dbg!("out number range {}", x);
-                return;
+                return Err(CustomError::OutOfIndex("task index out of range".to_string()).into());
             }
             let n = x - 1;
             let item = fix_task_vec.get(n as usize).unwrap().to_owned();
             if item == "午餐" {
                 input_something("have you take out pot from rice cooker").unwrap();
             }
-
-            task_instance.set_task(&item.to_string());
+            Ok(item)
         }
-        Err(_e) => {
-            let item = task_str;
-            task_instance.set_task(&item.to_string());
-        }
+        Err(_e) => Ok(task_str),
     }
-}
-fn summary_tasks(ntask: &NewTask) {
-    let sched_str = format!(
-        "expected schedule {} detail {} ",
-        ntask.expected_behavior, ntask.expected_details,
-    );
-    // add task from to
-    let task_dur = format!(
-        "task from {} to {}",
-        ntask.task.onetaskts.begin_ts.return_ts(),
-        ntask.task.onetaskts.end_ts.return_ts()
-    );
-    let task_str = format!(
-        "task: {} detail: {} ,last for {}",
-        ntask.task.task,
-        ntask.task.detail,
-        ntask.task.onetaskts.dur_to_hm(),
-    );
-    append_line_into_file("summary.txt", "==================".to_owned());
-    if !(ntask.expected_behavior.trim() == "") {
-        append_line_into_file("summary.txt", sched_str);
-    }
-    append_line_into_file("summary.txt", task_dur);
-    append_line_into_file("summary.txt", task_str);
 }
 /// create file  if not exist once app starts
-fn init_file() {
-    create_ifnotexist("todo.txt");
-    create_ifnotexist("date.txt");
-    create_ifnotexist("fix_task.txt");
-    create_ifnotexist("expect_behavior.txt");
-    create_ifnotexist("today_target.txt");
-    create_ifnotexist("tomorrow_target.txt");
-    create_ifnotexist("all_target.txt");
-    create_ifnotexist("mjb.txt");
-}
-fn read_dir(path: PathBuf) -> io::Result<Vec<PathBuf>> {
-    let mut paths = vec![];
-    for i in fs::read_dir(path)? {
-        let etr = i?;
-        let p = etr.path();
-        paths.push(p);
-    }
-    Ok(paths)
-}
-/// to aliyun
-fn upload_files_to_cloud() -> io::Result<()> {
-    let d = read_dir(".".into())?;
-    for filename in d {
-        //    allow dir to be uploaded
-        // if filename.is_dir() {
-        //     continue;
-        // }
-        let fname = format!("{}", filename.file_name().unwrap().to_string_lossy());
-        println!("try to upload file/dir {}", fname);
-        process::Command::new("./alidrive_uploader")
-            .args(&["-c", "config.yaml", fname.as_str(), "everydaytask"])
-            .status()
-            .expect("run alidrive_uploader error");
+fn init_file() -> Result<()> {
+    let files = [
+        TODAY_TASKS,
+        ALL_TASKS,
+        TOMORROW_TASKS,
+        TODO_FILE,
+        TASK_CANDIDATES,
+        MONTH_FILE,
+        SUMMARY_FILE,
+    ];
+    for f in files {
+        create_file(f)?;
     }
     Ok(())
-}
-/// copy task.db and summary.txt to ./storage/shared/ every day night
-fn cp_taskdb_to_storage() {
-    let p = Path::new("../storage/shared/everydaytask");
-    if !p.exists() {
-        fs::create_dir(p).unwrap();
-    }
-    let d = read_dir(".".into()).unwrap();
-    // let v=vec!["task.db","summary.txt","target_all.txt","task.sh","tasks.sh","taskp.sh"];
-    println!("copy files to phone storage");
-    for from in d {
-        if from.is_dir() {
-            continue;
-        }
-        // filter filename from path
-        let dst = p.join(format!("{}", from.file_name().unwrap().to_string_lossy()));
-        fs::copy(from, dst).unwrap();
-    }
-}
-fn get_exptected_task_details() -> (String, String) {
-    let mut v = read_alllines_from_file("expect_behavior.txt");
-    if !v.is_empty() {
-        let ext = v.remove(0);
-        let exd = v.join(" ");
-        (ext, exd)
-    } else {
-        ("".to_string(), "".to_string())
-    }
-}
-/// append_backup_task_to_extask if date is saturday
-fn write_backup_task_to_extask() {
-    let mut f = OpenOptions::new().append(true).open("extask.txt").unwrap();
-    let weekday = Local::now().weekday().to_string();
-    if weekday == "Sat".to_string() {
-        writeln!(f, "备份task.db,web source,read book").unwrap();
-        println!("already write backup task to next task file");
-    }
-}
-fn work_flow(task_instance: &mut Task) {
-    // get current_ts
-    let cur_ts = TimeStamp::current_ts();
-    let tkits = task_instance;
-    println!("{}", cur_ts);
-    // choose task_mode
-    let get_task_mode = input_something("input task-mode s:single,m:multi：").unwrap();
-    if get_task_mode == "s" {
-        //    cur_ts as end_ts
-        tkits.onetaskts.set_end_ts(&cur_ts);
-        println!("{}", tkits.onetaskts.end_ts.return_ts());
-        // set onedaydur
-        tkits.onetaskts.calcu_set_onetask_dur();
-        // single task;
-        // print fixed tasks ,waiting for being selected
-        let v = display_task();
-        let task = input_something(
-            format!(
-                "{}-{}做了什么？",
-                tkits.onetaskts.begin_ts.return_ts(),
-                tkits.onetaskts.end_ts.return_ts()
-            )
-            .as_str(),
-        )
-        .unwrap();
-        match_input_task(tkits.borrow_mut(), task, v);
-        println!("check if you fullfil your expect");
-        let v = read_alllines_from_file("expect_behavior.txt");
-        if !v.is_empty() {
-            for i in v {
-                println!("{}", i);
-            }
-        } else {
-            println!("No Schedule")
-        }
-        let mut detail = input_something("输入工作细节(logic impl)：").unwrap();
-        if detail == "" {
-            detail = "0".to_owned();
-        }
-        tkits.set_detail(&detail);
-
-        // here read ex task and detail from txt
-        // only works on single mode
-        let args = get_exptected_task_details();
-        let newtask =
-            NewTask::update_from_old_tasks(&*tkits, (args.0.as_str(), args.1.as_str())).unwrap();
-        clear_contents("expect_behavior.txt");
-        // pack task
-        let string_ln = newtask.to_string();
-        // write to todo
-        append_line_into_file("todo.txt", string_ln);
-    } else if get_task_mode == "m" {
-        tkits.onetaskts.set_end_ts(&cur_ts);
-        let curts = tkits.onetaskts.end_ts.return_ts();
-        // multi task
-        // print fixed tasks ,waiting for being selected
-        loop {
-            // return begin ts
-            println!("begin_ts is {}", tkits.onetaskts.begin_ts.return_ts());
-            let end_ts = input_something(format!(
-                "input job end time(q:quit ; n: current_ts {})：",
-                curts
-            ))
-            .unwrap();
-
-            if end_ts.chars().count() == 1 {
-                //   imply according to input n ,cur_ts as end_ts
-                //  set onetask_dur
-
-                if end_ts == "n" {
-                    tkits.onetaskts.set_end_ts(&cur_ts);
-                } else if end_ts == "q" {
-                    break;
-                } else {
-                    println!("wrong end ts commmand input");
-                    return;
-                }
-            } else {
-                tkits.onetaskts.set_end_ts(&end_ts);
-            }
-
-            // get task and detail
-            let v_fixtask = display_task();
-            let task = input_something("input tasknum or plain task：").unwrap();
-            match_input_task(tkits.borrow_mut(), task, v_fixtask);
-            let mut detail = input_something("输入工作细节：").unwrap();
-            if detail == "" {
-                detail = "0".to_owned();
-            }
-            tkits.set_detail(&detail);
-            tkits.onetaskts.calcu_set_onetask_dur();
-            // pack task
-            let newtask = NewTask::update_from_old_tasks(&*tkits, ("", "")).unwrap();
-            let string_ln = newtask.to_string();
-            clear_contents("expect_behavior.txt");
-            // write to todo
-            append_line_into_file("todo.txt", string_ln);
-            //    set last end_ts as this time begin_ts
-            tkits.onetaskts.begin_ts = tkits.onetaskts.end_ts.into();
-        }
-    }
 }
 /// ts:timestamp
 #[derive(Debug, Default, PartialEq, Clone, Copy)]
@@ -508,11 +374,15 @@ impl ToHM for DayEndTs {
     }
 }
 impl DayEndTs {
-    fn set_getup_ts(&mut self, hm_str: &String) {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn load_getup_ts(&mut self, hm_str: &str) {
         self.getup_ts = hm_str.to_owned().into()
     }
-    fn set_bed_ts(&mut self, hm_str: String) {
-        self.bed_ts = hm_str.into()
+    fn load_bed_ts(&mut self, hm_str: &str) {
+        self.bed_ts = hm_str.to_string().into()
     }
 
     fn calcu_set_day_dur(&mut self) {
@@ -550,77 +420,43 @@ impl DayEndTs {
         }
         println!("DayEndTs stay init state")
     }
-}
-#[derive(Debug, Default)]
-struct ExTask {
-    idx: u64,
-    date: Date,
-    extask: String,
-    state: u8,
-    descptions: String,
-}
-impl ExTask {
-    fn set_index(&mut self, idx: u64) {
-        self.idx = idx;
+
+    pub fn getup_ts(&self) -> TimeStamp {
+        self.getup_ts
     }
-    fn set_date(&mut self) {
-        self.date = Date::today_date();
+
+    pub fn bed_ts(&self) -> TimeStamp {
+        self.bed_ts
     }
-    fn set_extask(&mut self, task: &String) {
-        self.extask = task.to_owned();
+
+    pub fn day_duration(&self) -> u32 {
+        self.day_duration
     }
-    fn to_slice(&self) -> [String; 5] {
-        let sl = [
-            self.idx.to_string(),
-            self.date.to_string(),
-            self.extask.to_owned(),
-            self.state.to_string(),
-            self.descptions.to_owned(),
-        ];
-        sl
+
+    pub fn set_getup_ts(&mut self, getup_ts: TimeStamp) {
+        self.getup_ts = getup_ts;
+    }
+
+    pub fn set_bed_ts(&mut self, bed_ts: TimeStamp) {
+        self.bed_ts = bed_ts;
+    }
+
+    pub fn set_day_duration(&mut self, day_duration: u32) {
+        self.day_duration = day_duration;
     }
 }
-#[derive(Debug, Default, PartialEq, Clone)]
-pub struct NewTask {
-    expected_behavior: String,
-    /// readlines to one line join by ' '
-    expected_details: String,
-    task: Task,
-}
-impl ToString for NewTask {
-    fn to_string(&self) -> String {
-        format!(
-            "{};;{};;{}",
-            self.task.psudo_pack(),
-            self.expected_behavior,
-            self.expected_details
+
+impl Display for Task {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{};;{};;{};;{};;{}",
+            self.onetaskts.begin_ts,
+            self.onetaskts.end_ts,
+            self.onetaskts.one_task_duration,
+            self.task,
+            self.detail
         )
-    }
-}
-impl NewTask {
-    pub fn update_from_old_tasks(old_task: &Task, new_args: (&str, &str)) -> io::Result<Self> {
-        Ok(Self {
-            task: old_task.to_owned(),
-            expected_behavior: new_args.0.to_owned(),
-            expected_details: new_args.1.to_owned(),
-        })
-    }
-    pub fn to_slice(&self) -> [String; 12] {
-        let o_v = self.to_owned().task.to_slice();
-        [
-            (&o_v[0]).to_owned(),
-            (&o_v[1]).to_owned(),
-            (&o_v[2]).to_owned(),
-            (&o_v[3]).to_owned(),
-            (&o_v[4]).to_owned(),
-            (&o_v[5]).to_owned(),
-            (&o_v[6]).to_owned(),
-            (&o_v[7]).to_owned(),
-            (&o_v[8]).to_owned(),
-            (&o_v[9]).to_owned(),
-            self.to_owned().expected_behavior,
-            self.to_owned().expected_details,
-        ]
     }
 }
 #[derive(Debug, Default, PartialEq, Clone)]
@@ -633,48 +469,7 @@ pub struct Task {
     pub onetaskts: OneTaskTs,
     pub detail: String,
 }
-/// search word/phrase "抹脚布"，remind me every 3 days
-///
-/// write today's date to local file if today's tasks contain this work .
-///
-/// remind me if thme soan is equal to 3 days
-fn remind_work(v: &Vec<String>) -> io::Result<()> {
-    let p = "mjb.txt";
-    let s = v.join("");
-    if s.contains("抹脚布") {
-        Date::write_date_file(p);
-    } else {
-        let s = read_lastline_from_file(p);
-        if !s.is_none() {
-            let dt = Date::load_date_from_str(&s.unwrap());
-            let dt_today = Date::today_date();
-            //    compare date
-            // 2022.1.1 2021.12.30
-            if dt_today.year > dt.year {
-                // set a month as 30 days
-                if dt_today.day + 30 - dt.day == 3 {
-                    println!("It's time to wash 抹脚布");
-                    return Ok(());
-                }
-            }
-            // 7.1 > 6.30
-            if dt_today.month > dt.month {
-                if dt_today.day + 30 - dt.day == 3 {
-                    println!("It's time to wash 抹脚布");
-                    return Ok(());
-                }
-            }
 
-            if dt_today.month == dt.month {
-                if dt_today.day - dt.day == 3 {
-                    println!("It's time to wash 抹脚布");
-                    return Ok(());
-                }
-            }
-        }
-    }
-    Ok(())
-}
 ///```
 /// let  l=vec!["我","你","我","我","你"].iter().map(|e|e.to_string()).collect::<Vec<_>>();
 
@@ -704,9 +499,6 @@ fn process_data(dt: TaskPercentage) -> HashMap<String, u16> {
         .keys()
         .into_iter()
         .map(|e| e.to_string())
-        .collect::<Vec<_>>()
-        .clone()
-        .into_iter()
         .for_each(|i| {
             let ind = index_task_vec(&i, &t);
             task_index_dict.insert(i, ind);
@@ -737,25 +529,7 @@ fn get_value_by_index(idx: Vec<u8>, values: Vec<u16>) -> u16 {
     }
     s
 }
-#[derive(Debug, Default)]
-pub struct PercentageTasks {
-    one_task_dur: u16,
-    task: String,
-}
-impl PercentageTasks {
-    pub fn new() -> Self {
-        Self::default()
-    }
 
-    pub fn set_one_task_dur(mut self, dur: u16) -> Self {
-        self.one_task_dur = dur;
-        self
-    }
-    pub fn set_task(mut self, task: &str) -> Self {
-        self.task = task.to_owned();
-        self
-    }
-}
 #[derive(Debug, Default)]
 struct TaskPercentage {
     sql_path: String,
@@ -771,25 +545,29 @@ impl TaskPercentage {
         self.sql_path = path.into();
         self
     }
-    fn latest_date(mut self) -> Result<Self, TaskError> {
+    fn latest_date(mut self) -> Result<Self> {
         let sql = "SELECT date_ FROM everydaytask ORDER BY id DESC";
-        let c = Sqlite::new_conn(&self.sql_path)?;
-        let r = c.fetchone::<String>(sql)?;
+        let c = open_db(&self.sql_path)?;
+        let r = fetch_one(&c, sql)?;
         self.date = r;
         Ok(self)
     }
 
-    fn latest_data(mut self) -> Result<Self, TaskError> {
+    fn latest_data(mut self) -> Result<Self> {
         let date = &self.date;
         let sql = format!(
             "SELECT one_task_dur,task FROM everydaytask WHERE date_='{}'",
             date
         );
-        let r = Sqlite::new_conn(&self.sql_path)?.to_percentage_tasks(&sql)?;
-        for i in r {
-            self.tasks.push(i.task);
-            self.duration.push(i.one_task_dur);
+        let c = open_db(&self.sql_path)?;
+        let r = fetch_all(&sql, &c, Task::to_task)?;
+        if let Some(res) = r {
+            for i in res {
+                self.tasks.push(i.task);
+                self.duration.push(i.onetaskts.one_task_duration() as u16);
+            }
         }
+
         Ok(self)
     }
 }
@@ -804,7 +582,7 @@ fn get_percentage_rounded(x: f32, y: f32) -> String {
 /// e.g. lunch:1h; a workday 16h.
 ///
 ///  taks percentage=1*60/16*60
-fn task_percentage_rounded(sql_path: &str) -> Result<(), TaskError> {
+fn task_percentage_rounded(sql_path: &str) -> Result<()> {
     let t = TaskPercentage::new()
         .path(sql_path)
         .latest_date()?
@@ -827,384 +605,521 @@ fn task_percentage_rounded(sql_path: &str) -> Result<(), TaskError> {
     }
     Ok(())
 }
-/// append/write today's targets to a file
-///
-/// summary what task I have finished and what I have not finushed yet until today
-///
-/// read  source_fname into a vec of str,write them to dst line by line.
-/// do nothing if file is empty
-fn merge_targets(source_fname: &str, dst_fname: &str, date_str: &str, tomorrow_file: &str) {
-    let v = read_alllines_from_file(source_fname);
-    if v.is_empty() {
-        return ();
-    }
-    append_line_into_file(dst_fname, date_str.into());
-    for i in v {
-        append_line_into_file(dst_fname, i);
-    }
-    append_line_into_file(dst_fname, "\n".to_owned());
 
-    // write contents from tomorrow to today
-    // prefix each line with numeric order ,1. 2....
-    clear_contents(source_fname);
-    let tm = read_alllines_from_file(tomorrow_file);
-    if tm.is_empty() {
-        return ();
-    }
-    let mut n = 0;
-    for k in tm {
-        // skip if line is blank/empty in tomorrow
-        if k.trim().is_empty() {
-            continue;
-        }
-        n += 1;
-        let k = format!("{}. {}", n, k);
-        append_line_into_file(source_fname, k);
-    }
-}
 impl Task {
-    fn is_task_instance_default(&self) -> bool {
-        if self.date == Date::default()
-            || self.dayendts == DayEndTs::default()
-            || self.onetaskts == OneTaskTs::default()
-            || self.task == String::new()
-            || self.detail == String::new()
-        {
-            return true;
+    ///parse todo line to [`Task`] .
+    fn str_to_task(line: &str) -> Result<Task> {
+        let mut task = Task::new();
+        let parts = line.split(";;").collect::<Vec<&str>>();
+        task.onetaskts
+            .set_begin_ts(parts.get(0).as_ref().unwrap().to_string().into());
+        task.onetaskts
+            .set_end_ts(parts.get(1).as_ref().unwrap().to_string().into());
+        task.onetaskts
+            .set_one_task_duration(parts.get(2).as_ref().unwrap().parse()?);
+
+        task.set_task(parts.get(3).as_ref().unwrap());
+        task.set_detail(parts.get(4).as_ref().unwrap());
+        Ok(task)
+    }
+    fn parse_task_str(&mut self) -> Result<Vec<Task>> {
+        let todo_lines = read_lines(TODO_FILE)?;
+        let mut tasks = vec![];
+        let dt = self.date;
+        // calculate set dayts
+        let first = todo_lines.first();
+        let last = todo_lines.last();
+        let f_parts = first.as_ref().unwrap().split(";;").collect::<Vec<&str>>();
+        let l_parts = last.as_ref().unwrap().split(";;").collect::<Vec<&str>>();
+
+        let mut dayendts = DayEndTs::new();
+        dayendts.load_bed_ts(l_parts.get(1).as_ref().unwrap());
+        dayendts.load_getup_ts(f_parts.get(0).as_ref().unwrap());
+        dayendts.calcu_set_day_dur();
+
+        for l in todo_lines {
+            let parts = l.split(";;").collect::<Vec<&str>>();
+
+            let mut onetaskts = OneTaskTs::new();
+            onetaskts.load_begin_ts_from_str(parts.get(0).as_ref().unwrap());
+            onetaskts.load_dur_from_str(parts.get(2).as_ref().unwrap());
+            onetaskts.load_end_ts_from_str(parts.get(1).as_ref().unwrap());
+
+            let mut task = Task::new();
+            task.set_onetaskts(onetaskts);
+            task.set_task(parts.get(3).as_ref().unwrap());
+            task.set_detail(parts.get(4).as_ref().unwrap());
+            task.set_date(dt);
+            task.set_dayendts(dayendts.clone());
+            tasks.push(task);
         }
-        false
+        Ok(tasks)
     }
-    fn set_date(&mut self) {
-        self.date = Date::today_date()
+    fn load_set_date(&mut self) -> Result<()> {
+        self.date.load_set_date()?;
+        Ok(())
     }
-    fn set_detail(&mut self, detail: &String) {
+
+    fn set_detail(&mut self, detail: &str) {
         self.detail = detail.to_owned();
     }
-    fn set_task(&mut self, task: &String) {
+    fn set_task(&mut self, task: &str) {
         self.task = task.to_owned();
     }
-    pub fn to_slice(self) -> [String; 10] {
-        let v = [
-            (self.index.to_string()),
-            (self.date.into()),
-            (self.dayendts.getup_ts.return_ts().to_owned()),
-            (self.dayendts.bed_ts.return_ts().to_owned()),
-            (self.dayendts.day_duration.to_string()),
-            (self.onetaskts.begin_ts.return_ts().to_owned()),
-            (self.onetaskts.end_ts.return_ts().to_owned()),
-            (self.onetaskts.one_task_duration.to_string()),
-            (self.task.to_owned()),
-            (self.detail.to_owned()),
-        ];
-        v
-    }
-    fn return_task_dbline(&self, id_num: u64) -> [String; 10] {
-        let v = [
-            (id_num.to_string()),
-            (self.date.into()),
-            (self.dayendts.getup_ts.return_ts().to_owned()),
-            (self.dayendts.bed_ts.return_ts().to_owned()),
-            (self.dayendts.day_duration.to_string()),
-            (self.onetaskts.begin_ts.return_ts().to_owned()),
-            (self.onetaskts.end_ts.return_ts().to_owned()),
-            (self.onetaskts.one_task_duration.to_string()),
-            (self.task.to_owned()),
-            (self.detail.to_owned()),
-        ];
-        v
-    }
+
     fn new() -> Task {
         Self::default()
     }
     fn set_index(&mut self, idx: u64) {
         self.index = idx;
     }
-
-    pub fn start() {
-        // init to create
-        init_file();
-        let env_args = env::args().collect::<Vec<_>>();
-        if let Some(arg) = env_args.get(1) {
-            //  make summary by add env arg "s"
-            if arg == "s" {
-                //    run create db
-                let conn = Sqlite::new_conn("task.db").unwrap();
-
-                conn.db.execute_batch(include_str!("create.sql")).unwrap();
-                //    get an instance of Task
-                let mut t = Task::new();
-                //    summary
-                let v_alll = read_alllines_from_file("todo.txt");
-
-                //    set dayendts from todo
-                t.date.load_date_from_file();
-                // set getup bed ts
-                t.psudo_unpack(v_alll.get(0).unwrap().to_owned());
-                t.dayendts.set_getup_ts(&t.onetaskts.begin_ts.return_ts());
-                t.psudo_unpack(v_alll.last().unwrap().to_owned());
-                t.dayendts.set_bed_ts(t.onetaskts.end_ts.return_ts());
-                //    calcu and set dayend_dur
-                t.dayendts.calcu_set_day_dur();
-                // write date,dayendts to summary file
-                let date_str = format!("date {} {}", t.date.to_string(), t.date.weekday());
-                let daydur_str = format!(
-                    "the day is from {} to {} ,lasted {}",
-                    t.dayendts.getup_ts.return_ts(),
-                    t.dayendts.bed_ts.return_ts(),
-                    t.dayendts.dur_to_hm()
-                );
-                // make sure bed time is > 22:00,if so confirm 1 time.
-                // else confirm 3 times if < 22:00
-                let mut count = 0;
-                loop {
-                    let o = input_something(format!(
-                        "are you sure that you want to summary when you're at {}? (y/n)",
-                        t.dayendts.bed_ts.return_ts()
-                    ))
-                    .unwrap();
-                    if t.dayendts.bed_ts.hour >= 22 {
-                        if o.trim().to_ascii_uppercase() == "Y" {
-                            break;
-                        } else {
-                            std::process::abort();
-                        }
-                    } else {
-                        if o.trim().to_ascii_uppercase() != "Y" {
-                            std::process::abort();
-                        } else if o.trim().to_ascii_uppercase() == "Y" {
-                            count += 1;
-                            if count == 3 {
-                                break;
-                            }
-                        }
-                        continue;
-                    }
+    /// summary timing_check
+    /// make sure bed time is > 22:00,if so confirm 1 time.
+    /// else confirm 3 times if < 22:00
+    fn timing_check() -> Result<()> {
+        let mut count = 0;
+        let now = chrono::Local::now();
+        loop {
+            let r = input_something(format!(
+                "you want to summary when you're at {}:{}? (y/n)",
+                now.hour(),
+                now.minute()
+            ))?;
+            if now.hour() >= 22 {
+                if r.trim().to_ascii_uppercase() == "Y" {
+                    break;
+                } else {
+                    std::process::abort();
                 }
-                append_line_into_file("summary.txt", date_str.clone());
-                append_line_into_file("summary.txt", daydur_str);
-
-                //    get db_last_index from db_query
-                let sql = "SELECT id from everydaytask  ORDER BY id DESC";
-                let path = "task.db";
-                let mut idx = Sqlite::get_last_index(sql, path);
-                //    generate a vec of tasks
-                let mut v_alltk = vec![];
-
-                // look for word "抹脚布"
-                remind_work(&v_alll).unwrap();
-
-                for line in v_alll {
-                    idx += 1;
-                    t.set_index(idx);
-                    let nt = t.psudo_unpack(line);
-                    if t.is_task_instance_default() {
-                        panic!("task instance stay init state");
-                    }
-
-                    let ar = nt.to_slice();
-                    v_alltk.push(ar);
-                    // write today's jobs tp summary.txt
-                    summary_tasks(&nt);
-                }
-                // wifi charge
-                loop {
-                    let anwser = input_something("WIFI charge? (Y/N)").unwrap();
-                    let an = anwser.trim().to_uppercase();
-                    if an == "Y" {
-                        append_line_into_file("summary.txt", "WIFI 是否充电：是".to_owned());
-                        break;
-                    } else if an == "N" {
-                        append_line_into_file("summary.txt", "WIFI 是否充电：否".to_owned());
-                        break;
-                    } else {
-                        continue;
-                    }
-                }
-                append_line_into_file("summary.txt", "\n".to_owned());
-
-                // write target_today.txt into target_all.txt
-                // write target_tomorrow.txt to  target_today.txt
-                merge_targets(
-                    "today_target.txt",
-                    "all_target.txt",
-                    &date_str,
-                    "tomorrow_target.txt",
-                );
-
-                // write records to database
-                let sql = "INSERT INTO everydaytask VALUES (?,?,?,?,?,?,?,?,?,?,?,?)";
-                conn.db_execute_many(sql, v_alltk).unwrap();
-
-                // write_backup_task_to_extask();
-                cp_taskdb_to_storage();
-                println!("clear file contents of todo.txt,date.txt");
-                clear_contents("todo.txt");
-                clear_contents("date.txt");
-                clear_contents("taskstate.txt");
-                // use percentage to denote how much time a task is occupied in a workday.
-                task_percentage_rounded("task.db").unwrap();
-            } else if arg == "rpld" {
-                // retrive payment records of last day from db
-                Pay::new(None, None, None)
-                    .retrieve_records_form_last_day(Some("task.db"))
-                    .unwrap();
-            } else if arg == "rplm" {
-                Pay::new(None, None, None)
-                    .retrieve_records_form_last_month(Some("task.db"))
-                    .unwrap();
-            } else if arg == "rptm" {
-                Pay::new(None, None, None)
-                    .retrieve_records_form_this_month(Some("task.db"))
-                    .unwrap();
-            } else if arg == "h" {
-                // help: print meaning of these arguments
-                let mut m = HashMap::new();
-                m.insert("rpld", "retrive payment records of last day from db");
-                m.insert("rplm", "retrive payment records of last month from db");
-                m.insert("rptm", "retrive payment records of this month from db");
-                m.insert("pay", "write payments to db table pay");
-                m.insert("u", "upload file to aliyundriver");
-                m.insert("p", "print percentage each task occupy");
-                m.insert("s", "summary tasks and write them to a file");
-                m.iter().for_each(|e| println!("{} {}", e.0, e.1));
-            } else if arg == "pay" {
-                // write payments to db table pay in task.db
-                // connect db
-                let conn = Sqlite::new_conn("task.db").unwrap();
-                conn.db.execute_batch(include_str!("create.sql")).unwrap();
-                // read date from file
-                let s = read_lastline_from_file("date.txt").unwrap();
-                let datestr = Date::load_date_from_str(&s);
-                Pay::read_from_file(Some(conn.db), "pay.txt", Some(datestr.to_string()))
-                    .unwrap()
-                    .add_to_db()
-                    .unwrap()
-                    .clear_file();
-            } else if arg == "u" {
-                // means upload file to aliyundriver
-                upload_files_to_cloud().unwrap();
-            } else if arg == "p" {
-                // means task percentage
-                let sql_path = "task.db";
-                task_percentage_rounded(sql_path).unwrap();
-            } else if arg == "c" {
-                // nearly discarded
-
-                //   c : check out expect task
-                // manually fill in extask.txt  in advance
-                // loop txt and ask whether a task is finished or not and ask to input desc(through input)
-                let mut v = vec![];
-                //    get db_last_index from db_query
-                let conn = Sqlite::new_conn("task.db").unwrap();
-                conn.db
-                    .execute_batch(include_str!("create_check_expect_task.sql"))
-                    .unwrap();
-                let sql = "SELECT id from check_expect_task ORDER BY id DESC";
-                let path = "task.db";
-                let mut idx = Sqlite::get_last_index(sql, path);
-
-                for i in read_alllines_from_file("extask.txt") {
-                    idx += 1;
-                    let mut extask = ExTask::default();
-                    extask.set_index(idx);
-                    extask.set_date();
-                    extask.set_extask(&i);
-                    let state = loop {
-                        println!("{}", i);
-                        let t = input_something(format!("finished? 0:false,1:true：")).unwrap();
-                        if t == "1" || t == "0" {
-                            let st = t.parse::<u8>().unwrap();
-                            break st;
-                        }
-                    };
-                    extask.state = state;
-                    let desc = input_something("leave comments about extask:").unwrap();
-                    extask.descptions = desc;
-
-                    let sl = extask.to_slice();
-                    v.push(sl);
-                }
-                // write data,task,desc,id ,states,into db
-                let sql = "INSERT INTO check_expect_task VALUES (?,?,?,?,?)";
-                conn.db_execute_many_ex(sql, v).unwrap();
-                println!("finished check extask out");
-            } else if arg == "a" {
-
-                // other relavent fn needs modification
             } else {
-                //   help out
-                println!("s :summary today's tasks and write to db");
-                println!("c : check out whether expect task is done");
+                if r.trim().to_ascii_uppercase() != "Y" {
+                    std::process::abort();
+                } else if r.trim().to_ascii_uppercase() == "Y" {
+                    count += 1;
+                    if count == 3 {
+                        break;
+                    }
+                }
+                continue;
+            }
+        }
+        Ok(())
+    }
+    fn write_summary(body_lines: Vec<String>, task: &Task) -> Result<()> {
+        let sp = "==================";
+        let mut f = open_as_append(SUMMARY_FILE)?;
+        // preface
+        let date_str = format!("date {} {}", task.date.to_string(), task.date.weekday());
+        let day_time_note = format!(
+            "the day is from {} to {} ,last {} ",
+            task.dayendts.getup_ts().to_string(),
+            task.dayendts.bed_ts().to_string(),
+            task.dayendts.dur_to_hm()
+        );
+        append_line(&mut f, &date_str)?;
+        append_line(&mut f, &day_time_note)?;
+        // body
+        append_line(&mut f, sp)?;
+        for t in body_lines {
+            append_line(&mut f, &t)?;
+            append_line(&mut f, sp)?;
+        }
+
+        // wifi charge
+        loop {
+            let anwser = input_something("WIFI charge? (Y/N)")?;
+            let an = anwser.trim().to_uppercase();
+            if an == "Y" {
+                append_line(&mut f, "WIFI 是否充电：是")?;
+                break;
+            } else if an == "N" {
+                append_line(&mut f, "WIFI 是否充电：否")?;
+                break;
+            } else {
+                continue;
+            }
+        }
+        append_line(&mut f, "\n")?;
+        Ok(())
+    }
+    fn summary(conn: &rusqlite::Connection) -> Result<()> {
+        // summary timing check
+        Task::timing_check()?;
+        let mut task = Task::new();
+        task.load_set_date()?;
+        let tasks = task.parse_task_str()?;
+        // fet last usn/index
+        let sql = "SELECT id from everydaytask  ORDER BY id DESC";
+        let mut last_idx: u64 = match fetch_one(&conn, sql) {
+            Ok(ls) => ls,
+            Err(_) => 0,
+        };
+        // insert records
+        let sql = "INSERT INTO everydaytask VALUES (?,?,?,?,?,?,?,?,?,?)";
+        let mut summary_lines = vec![];
+
+        for mut t in tasks.clone() {
+            //    summary body
+            let s = format!(
+                "task from {} to {} \ntask: {} detail: {} ,last {}",
+                t.onetaskts.begin_ts,
+                t.onetaskts.end_ts,
+                t.task(),
+                t.detail(),
+                t.onetaskts.dur_to_hm()
+            );
+            summary_lines.push(s);
+            println!("{}", t.date.to_string());
+            last_idx += 1;
+            t.set_index(last_idx);
+            conn.execute(
+                sql,
+                rusqlite::params![
+                    t.index(),
+                    t.date.to_string(),
+                    t.dayendts.getup_ts().to_string(),
+                    t.dayendts.bed_ts().to_string(),
+                    t.dayendts.day_duration(),
+                    t.onetaskts.begin_ts().to_string(),
+                    t.onetaskts.end_ts().to_string(),
+                    t.onetaskts.one_task_duration(),
+                    t.task(),
+                    t.detail()
+                ],
+            )?;
+        }
+        // write today's tasks to summary file
+        let first = tasks.first();
+        Task::write_summary(summary_lines, first.as_ref().unwrap())?;
+        task_percentage_rounded(TASK_DB_FILE)?;
+        // move marked tasks from today task file to all task file
+        move_task(TODAY_TASKS, ALL_TASKS)?;
+        // clear file contents
+        clear_contents(TODO_FILE)?;
+        clear_contents(DATE_FILE)?;
+        Ok(())
+    }
+
+    fn fetch_month(conn: &rusqlite::Connection, month: u8) -> Result<()> {
+        let records = Pay::retrieve_month(&conn, month)?;
+        if let Some(res) = records {
+            res.iter().for_each(|e| println!("{}", e))
+        }
+        Ok(())
+    }
+    fn fetch_day(conn: &rusqlite::Connection, month: u8, day: u8) -> Result<()> {
+        let mut date = Date::today_date();
+        date.set_day(day as u32);
+        date.set_month(month as u32);
+        let records = Pay::retrieve_day(&conn, date)?;
+        if let Some(res) = records {
+            res.iter().for_each(|e| println!("{}", e))
+        }
+
+        Ok(())
+    }
+    fn to_task(row: &rusqlite::Row) -> rusqlite::Result<Task, rusqlite::Error> {
+        let mut onetaskts = OneTaskTs::new();
+        onetaskts.set_begin_ts(row.get::<_, String>(5)?.into());
+        onetaskts.set_end_ts(row.get::<_, String>(6)?.into());
+        onetaskts.set_one_task_duration(row.get::<_, u32>(7)?);
+
+        let mut dayendts = DayEndTs::new();
+        dayendts.set_getup_ts(row.get::<_, String>(2)?.into());
+        dayendts.set_bed_ts(row.get::<_, String>(3)?.into());
+        dayendts.set_day_duration(row.get::<_, u32>(4)?);
+
+        Ok(Task {
+            index: row.get(0)?,
+            date: row.get::<_, String>(1)?.into(),
+            dayendts,
+            onetaskts,
+            task: row.get(8)?,
+            detail: row.get(9)?,
+        })
+    }
+    /// first query field `task`,then query field `detail` if `task` return no result .
+    fn search_task(conn: &rusqlite::Connection, words: &str) -> Result<()> {
+        let sql = format!("SELECT * FROM everydaytask where task like '%{}%'", words);
+        let tasks = fetch_all(&sql, conn, Task::to_task)?;
+        if let Some(res) = tasks {
+            res.iter().for_each(|e| println!("date: {},{}", e.date, e))
+        }
+        let sql = format!("SELECT * FROM everydaytask where detail like '%{}%'", words);
+        let details = fetch_all(&sql, conn, Task::to_task)?;
+        if let Some(res) = details {
+            res.iter().for_each(|e| println!("date: {},{}", e.date, e))
+        }
+
+        Ok(())
+    }
+
+    /// re-order tasks in task files.
+    /// # Rules:
+    /// ## for [`TODAY_TASKS`] and MONTH_TASKS
+    /// 1. root tasks: put below if all branch tasks in a root task are marked as either OK or BAD
+    ///
+    /// 2. branch tasks: put below if some of them are marked as either OK or BAD
+    ///
+    /// 3. prefix each root task with a correct serial number
+    /// # example
+    ///
+    /// a task sample
+    /// ```
+    /// [
+    /// root-task{
+    /// 1. branch-task 1
+    ///
+    /// 2. branch-task 2
+    /// }
+    /// ]
+    /// ```
+    fn order() -> Result<()> {
+        // month file,need to read filename from another file
+        let mut files = read_lines(MONTH_FILE)?;
+        files.push(TODAY_TASKS.into());
+        for fpath in files {
+            Task::order_logic(&fpath)?
+        }
+        Ok(())
+    }
+    fn order_logic(fpath: &str) -> Result<()> {
+        // today task file，
+        let ts = capture_task(fpath)?;
+        let mut f = open_as_append(fpath)?;
+        let roots = ts.iter().map(|e| RootTask::from_str(e)).collect::<Vec<_>>();
+        let roots_marked = roots_marked(&roots);
+        let roots_not_marked = roots_not_marked(&roots);
+        clear_contents(fpath)?;
+        for r in roots_not_marked {
+            let s = r.to_string();
+            f.write(format!("{}\n", s).as_bytes())?;
+        }
+        for r in roots_marked {
+            let s = r.to_string();
+            f.write(format!("{}\n", s).as_bytes())?;
+        }
+        Ok(())
+    }
+    /// query field `item` .
+    fn search_pay(conn: &rusqlite::Connection, words: &str) -> Result<()> {
+        let results = Pay::query_pay(conn, words)?;
+        if let Some(res) = results {
+            res.iter().for_each(|e| println!("{}", e))
+        }
+        Ok(())
+    }
+
+    /// upload files to cloud.
+    ///
+    /// ```
+    ///  ./alidrive_uploader -c config.yaml . everydaytask/
+    /// ```
+    fn upload() {
+        process::Command::new(ALIDRIVE_CMD)
+            .args(&["-c", "config.yaml", ".", "everydaytask/"])
+            .status()
+            .expect("run alidrive_uploader error");
+    }
+    pub(crate) fn start(args: Args) -> Result<()> {
+        let cmd = args.cmd;
+        let conn = open_db(TASK_DB_FILE)?;
+        conn.execute(include_str!("create.sql"), [])?;
+
+        if let Some(rcmd) = cmd {
+            match rcmd {
+                RetrieveCommand::Pay {
+                    mut retrieve,
+                    insert,
+                } => {
+                    if insert {
+                        // insert payments into db
+                        write_pay()?;
+                    }
+                    if !retrieve.is_empty() {
+                        if retrieve.len() == 1 {
+                            // indicate only month is present
+                            let month = retrieve.remove(0);
+                            Task::fetch_month(&conn, month)?;
+                        } else {
+                            // only take first two elements from vec,eben if there are more than 2 elements
+                            let month = retrieve.remove(0);
+                            let day = retrieve.remove(1);
+                            Task::fetch_day(&conn, month, day)?;
+                        }
+                    }
+                }
+                RetrieveCommand::Search { dbname, words } => match dbname {
+                    DBOption::Pay => {
+                        Task::search_pay(&conn, &words)?;
+                    }
+                    DBOption::Task => {
+                        Task::search_task(&conn, &words)?;
+                    }
+                },
+                RetrieveCommand::Task {
+                    // mut retrieve,
+                    summary,
+                    order,
+                    upload,
+                } => {
+                    // if !retrieve.is_empty() {
+                    //     if retrieve.len() == 1 {
+                    //         // indicate only month is present
+                    //         let month = retrieve.remove(0);
+
+                    //     } else {
+                    //         // only take first two elements from vec,eben if there are more than 2 elements
+                    //         let month = retrieve.remove(0);
+                    //         let day = retrieve.remove(1);
+                    //     }
+                    // }
+                    if summary {
+                        Task::summary(&conn)?;
+                    }
+                    if order {
+                        Task::order()?;
+                    }
+                    if upload {
+                        Task::upload();
+                    }
+                }
             }
         } else {
-            //  create a new task instance
-            let task_instance = Rc::new(RefCell::new(Task::new()));
-            let tkits = &mut *(*task_instance).borrow_mut();
-            // check if todo.txt is empty
-
-            if file_contents_empty("todo.txt") {
-                // write today's date
-                if file_contents_empty("date.txt") {
-                    Date::write_date();
-                }
-
-                tkits.set_date();
-                // true   ,start from input getup_ts,this as begin_ts
-                let get_getup_ts = input_something("when did you getup：").unwrap();
-                // return begin - end ts
-                // set getup_ts,begin_ts
-
-                tkits.dayendts.set_getup_ts(&get_getup_ts);
-                tkits.onetaskts.set_begin_ts(&get_getup_ts);
-                work_flow(tkits);
-
-                return;
-            }
-
-            // false ,start from load task from last line of todo.txt
-            let lline = read_lastline_from_file("todo.txt");
-            // load to struct from lline
-            tkits.psudo_unpack(lline.unwrap());
-            // load date from txt
-            tkits.date.load_date_from_file();
-            //    set last end_ts as this time begin_ts
-            tkits
-                .onetaskts
-                .set_begin_ts(&tkits.onetaskts.end_ts.return_ts());
-            work_flow(tkits);
+            // run task process procedures
+            Task::task_process()?;
         }
+
+        Ok(())
     }
-    // format task to todo.txt line by line
-    fn psudo_pack(&self) -> String {
-        // not finished
-        format!(
-            "{};;{};;{}",
-            self.onetaskts.return_ts_dur_line(),
-            self.task,
-            self.detail
-        )
+    fn task_detail_input(task: &mut Task, f: &mut std::fs::File) -> Result<()> {
+        task.onetaskts.calcu_set_onetask_dur();
+        // single task;
+        // print fixed tasks ,waiting for being selected
+        let v = display_task()?;
+        let task_str = loop {
+            let get_input = input_something(format!(
+                "{}-{}做了什么？",
+                task.onetaskts.begin_ts.return_ts(),
+                task.onetaskts.end_ts.return_ts()
+            ))?;
+            if !get_input.trim().is_empty() {
+                break get_input;
+            }
+        };
+        let task_str = match_task(task_str, v)?;
+
+        let mut detail = input_something("输入工作细节(logic impl)：")?;
+        if detail.is_empty() {
+            detail = "0".to_owned();
+        }
+        task.set_task(&task_str);
+        task.set_detail(&detail);
+
+        let line = task.to_string();
+        append_line(f, &line)?;
+        Ok(())
     }
-    /// split string by seo ";;",process data from todo.txt
-    fn psudo_unpack(&mut self, strs: String) -> NewTask {
-        let v = strs.split(";;").collect::<Vec<&str>>();
-        self.onetaskts.set_begin_ts(&v.get(0).unwrap().to_string());
-        self.onetaskts.set_end_ts(&v.get(1).unwrap().to_string());
-        self.onetaskts
-            .set_onetask_dur(&v.get(2).unwrap().to_string());
-        self.set_task(&v.get(3).unwrap().to_string());
-        self.set_detail(&v.get(4).unwrap().to_string());
-        let nt = NewTask::update_from_old_tasks(self, (v.get(5).unwrap(), v.get(6).unwrap()));
-        nt.unwrap()
+    fn task_process() -> Result<()> {
+        init_file()?;
+        // re-oder task file
+        Task::order()?;
+
+        // init file : create files
+        let mut task = Task::new();
+        let mut f = open_as_append(TODO_FILE)?;
+        // check if todo.txt is empty
+        if file_empty(TODO_FILE)? {
+            // write today's date
+            if file_empty(DATE_FILE)? {
+                Date::write_date()?;
+            }
+            task.load_set_date()?;
+
+            // true   ,start from input getup_ts,this as begin_ts
+            let get_getup_ts = input_something("when did you getup：")?;
+            // task.dayendts.set_getup_ts(get_getup_ts.into());
+            task.onetaskts.set_begin_ts(get_getup_ts.into());
+        } else {
+            // parse one task begin ts
+            let todo_lines = read_lines(TODO_FILE)?;
+            let last_line = todo_lines.last();
+            let temp_task = Task::str_to_task(last_line.as_ref().unwrap())?;
+            task.onetaskts.set_begin_ts(temp_task.onetaskts.end_ts());
+        }
+
+        // main work
+        let cur_ts = TimeStamp::current_ts();
+        // choose task_mode
+        let get_task_mode = input_something("input task-mode s:single,m:multi：").unwrap();
+        if get_task_mode == "s" {
+            task.onetaskts.set_end_ts(cur_ts);
+            // set one day dur
+            Task::task_detail_input(&mut task, &mut f)?;
+        } else if get_task_mode == "m" {
+            task.onetaskts.set_end_ts(cur_ts.clone());
+            let curts = task.onetaskts.end_ts.return_ts();
+            // multi task
+            // print fixed tasks ,waiting for being selected
+            loop {
+                // return begin ts
+                println!("begin_ts is {}", task.onetaskts.begin_ts.return_ts());
+                let end_ts = input_something(format!(
+                    "input job end time(q:quit ; n: current_ts {})：",
+                    curts
+                ))?;
+
+                if end_ts.chars().count() == 1 {
+                    //   imply according to input n ,cur_ts as end_ts
+                    //  set onetask_dur
+
+                    if end_ts == "n" {
+                        task.onetaskts.set_end_ts(cur_ts);
+                    } else if end_ts == "q" {
+                        break;
+                    } else {
+                        println!("wrong end ts commmand input");
+                        return Err(CustomError::ValueNotFound(
+                            "no such cmd in multi input".into(),
+                        )
+                        .into());
+                    }
+                } else {
+                    task.onetaskts.set_end_ts(end_ts.into());
+                }
+                Task::task_detail_input(&mut task, &mut f)?;
+                task.onetaskts.set_begin_ts(task.onetaskts.end_ts());
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn set_onetaskts(&mut self, onetaskts: OneTaskTs) {
+        self.onetaskts = onetaskts;
+    }
+
+    pub fn set_dayendts(&mut self, dayendts: DayEndTs) {
+        self.dayendts = dayendts;
+    }
+
+    pub fn set_date(&mut self, date: Date) {
+        self.date = date;
+    }
+
+    pub fn index(&self) -> u64 {
+        self.index
+    }
+
+    pub fn task(&self) -> &str {
+        self.task.as_ref()
+    }
+
+    pub fn detail(&self) -> &str {
+        self.detail.as_ref()
     }
 }
 
-#[test]
-fn test_unpack() {
-    let mut tk = Task::new();
-    let s = "8:0;;10:54;;174;;吃饭;;小葱";
-    tk.psudo_unpack(s.to_owned());
-    println!("{:?}", tk);
-}
 #[test]
 fn test_intlen() {
     let s = 00.to_string();
@@ -1224,23 +1139,6 @@ fn test_yu() {
     println!("{}{}", r, x);
 }
 
-#[test]
-fn test_lines() {
-    use std::fs::File;
-    use std::io::BufReader;
-    let cursor = File::open("t.txt").unwrap();
-    let bf = BufReader::new(&cursor);
-    let mut v = vec![];
-    for i in bf.lines() {
-        v.push(i.unwrap())
-    }
-    println!("{:?}", v);
-}
-#[test]
-fn test_percentages_task() {
-    let t = PercentageTasks::new().set_one_task_dur(10).set_task("a");
-    println!("{:?}", t);
-}
 /// \['f', 'o', 'e', 't', 'r', 'a', 'b']
 ///
 /// \[1, 2, 1, 1, 1, 1, 1]
@@ -1278,17 +1176,4 @@ fn test_index_task() {
     let word = "我";
     let o = index_task_vec(&word, &l);
     assert_eq!(vec![0, 2, 3], o);
-}
-
-#[test]
-fn test_readdir() {
-    let p = read_dir(".".into()).unwrap();
-    println!(
-        "{:?}",
-        p.iter()
-            .map(|e| e.file_name().unwrap().to_string_lossy())
-            .collect::<Vec<_>>()
-    );
-    // [".\\.git", ".\\.github", ".\\.gitignore",]
-    println!("{:?}", p);
 }
