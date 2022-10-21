@@ -944,7 +944,7 @@ impl Task {
                         } else {
                             // only take first two elements from vec,eben if there are more than 2 elements
                             let month = retrieve.remove(0);
-                            let day = retrieve.remove(1);
+                            let day = retrieve.remove(0);
                             Task::fetch_day(&conn, month, day)?;
                         }
                     }

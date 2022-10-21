@@ -152,7 +152,7 @@ pub(crate) struct Branch {
 }
 impl Display for Branch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}    {}", self.item, self.marked)
+        write!(f, "{}    {}", self.item.trim(), self.marked.trim())
     }
 }
 impl Branch {

@@ -20,7 +20,7 @@ pub(crate) enum RetrieveCommand {
     /// payment-related operations
     Pay {
         /// Retrieve payment records from database by a specified date,e.g. pay -r 9,3  
-        #[clap(short, long, value_delimiter(','))]
+        #[clap(short, long, value_delimiter('.'))]
         retrieve: Vec<u8>,
         /// insert records about payments in file pay.txt into database
         #[arg(short, long, action)]
