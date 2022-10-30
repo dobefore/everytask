@@ -95,7 +95,7 @@ impl Pay {
             month
         );
 
-        Ok(fetch_all(&sql, conn, Pay::to_payitem)?)
+     fetch_all(&sql, conn, Pay::to_payitem)
     }
 
     /// used to test or remove records all
@@ -200,7 +200,7 @@ impl PayItem {
     pub fn from_string(s: &str, date: Option<String>) -> Result<Self> {
         let r = s.split('，').collect::<Vec<&str>>();
         let categories = PayItem::category();
-        let item = r.get(0).unwrap().trim().to_string();
+        let item = r.first().unwrap().trim().to_string();
         let price = r.get(1).unwrap().trim();
 
         let item = if item.is_empty() {
@@ -244,21 +244,21 @@ impl PayItem {
         let len_of_fields = r.len();
         if len_of_fields == 2 || len_of_fields == 3 || len_of_fields == 4 {
             // means fields are respectly items,price，category,amounts
-            return Ok(Self::new(
+             Ok(Self::new(
                 Some(item?),
                 date,
                 Some(price?),
                 Some(amounts.into()),
                 Some(category?),
-            ));
+            ))
         } else {
             // no available
-            return Err(CustomError::ParsePayItemError(format!(
+             Err(CustomError::ParsePayItemError(format!(
                 "invalid numbers of fields {}",
                 r.len()
             ))
-            .into());
-        };
+            .into())
+        }
     }
 }
 

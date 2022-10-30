@@ -33,6 +33,7 @@ pub(crate) static TODAY_TASKS: &str = "today_tasks.txt";
 pub(crate) static TOMORROW_TASKS: &str = "tomorrow_tasks.txt";
 pub(crate) static MONTH_FILE: &str = "months.txt";
 pub(crate) static ALIDRIVE_CMD: &str = "./alidrive_uploader";
+static NEXT: &str = "next";
 // two aoms:
 //1.every daynight copy files to local storage
 // 2. end time >= begin time
@@ -548,8 +549,11 @@ impl TaskPercentage {
     fn latest_date(mut self) -> Result<Self> {
         let sql = "SELECT date_ FROM everydaytask ORDER BY id DESC";
         let c = open_db(&self.sql_path)?;
-        let r = fetch_one(&c, sql)?;
-        self.date = r;
+        if let Some(r) = fetch_one(&c, sql)? {
+            self.date = r;
+        } else {
+            eprintln!("no date retrieved from db")
+        }
         Ok(self)
     }
 
@@ -745,14 +749,17 @@ impl Task {
     fn summary(conn: &rusqlite::Connection) -> Result<()> {
         // summary timing check
         Task::timing_check()?;
+        // automatically insert payments to db.
+        write_pay()?;
+
         let mut task = Task::new();
         task.load_set_date()?;
         let tasks = task.parse_task_str()?;
         // fet last usn/index
         let sql = "SELECT id from everydaytask  ORDER BY id DESC";
-        let mut last_idx: u64 = match fetch_one(&conn, sql) {
-            Ok(ls) => ls,
-            Err(_) => 0,
+        let mut last_idx: u64 = match fetch_one(&conn, sql)? {
+            Some(ls) => ls,
+            None => 0,
         };
         // insert records
         let sql = "INSERT INTO everydaytask VALUES (?,?,?,?,?,?,?,?,?,?)";
@@ -893,11 +900,11 @@ impl Task {
         clear_contents(fpath)?;
         for r in roots_not_marked {
             let s = r.to_string();
-            f.write(format!("{}\n", s).as_bytes())?;
+            f.write_all(format!("{}\n", s).as_bytes())?;
         }
         for r in roots_marked {
             let s = r.to_string();
-            f.write(format!("{}\n", s).as_bytes())?;
+            f.write_all(format!("{}\n", s).as_bytes())?;
         }
         Ok(())
     }
@@ -1009,9 +1016,17 @@ impl Task {
         };
         let task_str = match_task(task_str, v)?;
 
-        let mut detail = input_something("输入工作细节(logic impl)：")?;
+        let mut detail = input_something("输入工作细节(l:use last line from next)：")?;
         if detail.is_empty() {
             detail = "0".to_owned();
+        } else if detail.trim() == "l" {
+            // read last line from next file
+            let lines = read_lastline(NEXT)?;
+            detail = if let Some(l) = lines {
+                l
+            } else {
+                "0".to_owned()
+            };
         }
         task.set_task(&task_str);
         task.set_detail(&detail);

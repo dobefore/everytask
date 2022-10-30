@@ -19,25 +19,25 @@ pub(crate) fn move_task(from: &str, to: &str) -> Result<()> {
     //  write date first
     let mut date = task::Date::new();
     date.load_set_date()?;
-    f.write(format!("date {} {}\n", date.to_string(), date.weekday()).as_bytes())?;
+    f.write_all(format!("date {} {}\n", date, date.weekday()).as_bytes())?;
 
     for r in roots_marked {
-        f.write(format!("{}\n", r.to_string()).as_bytes())?;
+        f.write_all(format!("{}\n", r.to_string()).as_bytes())?;
     }
 
     clear_contents(from)?;
     let mut fr = open_as_append(from)?;
     for r in roots_not_marked {
-        fr.write(format!("{}\n", r.to_string()).as_bytes())?;
+        fr.write_all(format!("{}\n", r.to_string()).as_bytes())?;
     }
     Ok(())
 }
 /// return root tasks whose inner branch tasks are marked either OK or BAD.
-pub(crate) fn roots_marked(roots: &Vec<RootTask>) -> Vec<&RootTask> {
+pub(crate) fn roots_marked(roots: &[RootTask]) -> Vec<&RootTask> {
     roots.iter().filter(|e| e.all_marked()).collect::<Vec<_>>()
 }
 /// return root tasks whose inner branch tasks are either partly marked or not marked altogether.
-pub(crate) fn roots_not_marked(roots: &Vec<RootTask>) -> Vec<&RootTask> {
+pub(crate) fn roots_not_marked(roots: &[RootTask]) -> Vec<&RootTask> {
     roots.iter().filter(|e| !e.all_marked()).collect::<Vec<_>>()
 }
 pub(crate) fn capture_task(fpatth: &str) -> Result<Vec<String>> {
@@ -70,11 +70,11 @@ impl Display for RootTask {
         let mut b_str = String::new();
         for b in bs_not_marked {
             n += 1;
-            b_str.push_str(&format!("    {}.{}\n", n, b.to_string()));
+            b_str.push_str(&format!("    {}.{}\n", n, b));
         }
         for b in bs_marked {
             n += 1;
-            b_str.push_str(&format!("    {}.{}\n", n, b.to_string()));
+            b_str.push_str(&format!("    {}.{}\n", n, b));
         }
         let format = format!(
             "[
@@ -117,8 +117,8 @@ impl RootTask {
     /// }
     /// ```
     pub(crate) fn from_str(s: &str) -> Self {
-        let v = s.split("{").collect::<Vec<_>>();
-        let root_item = v.get(0).as_ref().unwrap().to_string();
+        let v = s.split('{').collect::<Vec<_>>();
+        let root_item = v.first().unwrap().to_string();
         let b = v.get(1).as_ref().unwrap().to_string();
 
         let mut root = RootTask::new();
@@ -126,7 +126,7 @@ impl RootTask {
         for l in b
             .lines()
             .filter(|e| !e.trim().is_empty())
-            .filter(|e| !e.contains("}"))
+            .filter(|e| !e.contains('}'))
         {
             let branch = Branch::from_str(l.trim());
             bs.push(branch);
@@ -160,11 +160,7 @@ impl Branch {
         Self::default()
     }
     fn is_marked(&self) -> bool {
-        if self.marked.contains("OK") || self.marked.contains("BAD") {
-            true
-        } else {
-            false
-        }
+        self.marked.contains("OK") || self.marked.contains("BAD")
     }
     ///# steps:
     /// 1. remove prefix serial number by splitting at `.`
@@ -178,10 +174,10 @@ impl Branch {
     /// 3. b3 BAD
     /// ```
     fn from_str(line: &str) -> Self {
-        let v = line.split(".").collect::<Vec<_>>();
+        let v = line.split('.').collect::<Vec<_>>();
         // remove prefix serial number
         let s_without_prefix = v[1..].join(".").trim().to_string();
-        let vn = s_without_prefix.split(" ").collect::<Vec<_>>();
+        let vn = s_without_prefix.split(' ').collect::<Vec<_>>();
         let mark = vn.last();
         let m = mark.as_ref().unwrap();
         let mut b = Branch::new();

@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+use rusqlite::OptionalExtension;
 pub use rusqlite::{params, types::FromSql, Connection, Result, Row, RowIndex};
 /// drop unused colunms from table
 ///
@@ -25,8 +26,11 @@ pub(crate) fn open_db<P: AsRef<std::path::Path>>(
     Ok(conn)
 }
 /// fetch first record if there are more than one.
-pub(crate) fn fetch_one<T: FromSql>(conn: &Connection, sql: &str) -> Result<T, rusqlite::Error> {
-    let s = conn.query_row(sql, params![], |r| r.get(0))?;
+pub(crate) fn fetch_one<T: FromSql>(
+    conn: &Connection,
+    sql: &str,
+) -> Result<Option<T>, rusqlite::Error> {
+    let s = conn.query_row(sql, params![], |r| r.get(0)).optional()?;
 
     Ok(s)
 }
@@ -38,7 +42,7 @@ pub(crate) fn fetch_all<T, F>(
 where
     F: FnMut(&Row) -> Result<T, rusqlite::Error>,
 {
-    let mut stmt = conn.prepare(&sql)?;
+    let mut stmt = conn.prepare(sql)?;
     // [Ok(TB { c: "c1", idx: 1 }), Ok(TB { c: "c2", idx: 2 })]
     let r = stmt
         .query_map([], to_struct)?
