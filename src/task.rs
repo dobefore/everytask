@@ -326,9 +326,10 @@ fn match_task(task_str: String, fix_task_vec: Vec<String>) -> Result<String> {
             }
             let n = x - 1;
             let item = fix_task_vec.get(n as usize).unwrap().to_owned();
-            if item == "午餐" {
-                input_something("have you take out pot from rice cooker").unwrap();
-            }
+            // I now am used to taking out pot from rice cooker.
+            // if item == "午餐" {
+            //     input_something("have you take out pot from rice cooker").unwrap();
+            // }
             Ok(item)
         }
         Err(_e) => Ok(task_str),
@@ -729,20 +730,20 @@ impl Task {
             append_line(&mut f, sp)?;
         }
 
-        // wifi charge
-        loop {
-            let anwser = input_something("WIFI charge? (Y/N)")?;
-            let an = anwser.trim().to_uppercase();
-            if an == "Y" {
-                append_line(&mut f, "WIFI 是否充电：是")?;
-                break;
-            } else if an == "N" {
-                append_line(&mut f, "WIFI 是否充电：否")?;
-                break;
-            } else {
-                continue;
-            }
-        }
+        // wifi charge. Now I use wifi of bandwidth,so I don't need to charge.
+        // loop {
+        //     let anwser = input_something("WIFI charge? (Y/N)")?;
+        //     let an = anwser.trim().to_uppercase();
+        //     if an == "Y" {
+        //         append_line(&mut f, "WIFI 是否充电：是")?;
+        //         break;
+        //     } else if an == "N" {
+        //         append_line(&mut f, "WIFI 是否充电：否")?;
+        //         break;
+        //     } else {
+        //         continue;
+        //     }
+        // }
         append_line(&mut f, "\n")?;
         Ok(())
     }
