@@ -9,7 +9,10 @@ edition = "2021"
 chrono = "0.4.19"
 counter = "0.5.5"
 clap ={version= "4.0.8",features = ["derive"]}
-rusqlite= {version = "0.25.1",features = ["bundled"]}
 regex = "1.6.0"
+rusqlite= {version = "0.28.0",features = ["bundled"]}
 
+#use cross-compiled static sqlite3 library
+#[target.aarch64-unknown-linux-musl.dependencies]
+#rusqlite = "0.28.0"
 
